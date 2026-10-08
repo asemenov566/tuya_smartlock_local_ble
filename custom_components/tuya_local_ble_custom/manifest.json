@@ -1,0 +1,25 @@
+{
+  "domain": "tuya_local_ble_custom",
+  "name": "Tuya Smartlock Local BLE",
+  "bluetooth": [
+    {
+      "connectable": true,
+      "service_data_uuid": "0000fd50-0000-1000-8000-00805f9b34fb"
+    }
+  ],
+  "codeowners": [
+    "@asemenov566"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "bluetooth_adapters"
+  ],
+  "documentation": "https://github.com/asemenov566/tuya_smartlock_local_ble",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/asemenov566/tuya_smartlock_local_ble/issues",
+  "requirements": [
+    "pycryptodome==3.20.0"
+  ],
+  "version": "0.2.0"
+}

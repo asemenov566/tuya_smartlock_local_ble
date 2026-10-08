@@ -1,0 +1,90 @@
+{
+  "title": "Tuya Smartlock Local BLE",
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Choose a BLE device",
+        "description": "Nearby FD50 devices are shown. Discovery alone does not prove compatibility: select your A1 Ultra lock.",
+        "data": {
+          "address": "Device"
+        }
+      },
+      "credentials": {
+        "title": "Your lock credentials",
+        "description": "Enter your own lock credentials from Tuya Developer Platform; see INSTALL.md. The installed Tuya integration does not import keys automatically. Connection verification does not operate the motor.",
+        "data": {
+          "uuid": "UUID",
+          "local_key": "Local key",
+          "device_id": "Device ID",
+          "ble_unlock_check": "BLE unlock check (Base64)"
+        }
+      },
+      "model": {
+        "title": "Lock model",
+        "data": {
+          "product_id": "Model"
+        }
+      }
+    },
+    "error": {
+      "invalid_credentials": "Check the credential fields and the Base64 BLE unlock check.",
+      "cannot_connect": "Cannot verify the connection. Check credentials, Bluetooth range and disconnect the phone from the lock."
+    },
+    "abort": {
+      "already_configured": "Device is already configured.",
+      "no_unconfigured_devices": "No new FD50 devices found. Wake the lock, check HA Bluetooth and retry."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "A1 Ultra BLE",
+        "description": "Maintain the BLE session and reconnect after disconnection.",
+        "data": {
+          "keep_connected": "Keep connected"
+        }
+      }
+    }
+  },
+  "entity": {
+    "lock": {
+      "manual_lock": {
+        "name": "Lock"
+      }
+    },
+    "select": {
+      "beep_volume": {
+        "name": "Sound volume",
+        "state": {
+          "mute": "Mute",
+          "normal": "Normal"
+        }
+      }
+    },
+    "switch": {
+      "change_direction": {
+        "name": "Reverse direction"
+      }
+    },
+    "button": {
+      "calibrate": {
+        "name": "Recalibrate"
+      }
+    },
+    "sensor": {
+      "battery_state": {
+        "name": "Battery",
+        "state": {
+          "high": "High",
+          "medium": "Medium",
+          "low": "Low",
+          "poweroff": "Empty"
+        }
+      },
+      "signal_strength": {
+        "name": "BLE signal"
+      }
+    }
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "title": "Tuya Smartlock Local BLE",
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Выберите BLE-устройство",
+        "description": "Показаны устройства FD50 поблизости. Это ещё не подтверждение совместимости: выберите свой замок A1 Ultra.",
+        "data": {
+          "address": "Устройство"
+        }
+      },
+      "credentials": {
+        "title": "Данные вашего замка",
+        "description": "Введите данные собственного замка из Tuya Developer Platform. Подробности — INSTALL.ru.md в репозитории. Установленная интеграция Tuya не передаёт ключи автоматически. Проверка соединения не запускает мотор.",
+        "data": {
+          "uuid": "UUID",
+          "local_key": "Local key",
+          "device_id": "Device ID",
+          "ble_unlock_check": "BLE unlock check (Base64)"
+        }
+      },
+      "model": {
+        "title": "Модель замка",
+        "data": {
+          "product_id": "Модель"
+        }
+      }
+    },
+    "error": {
+      "invalid_credentials": "Проверьте заполнение полей и Base64 BLE unlock check.",
+      "cannot_connect": "Не удалось проверить соединение. Проверьте ключи, Bluetooth и отключите подключение телефона к замку."
+    },
+    "abort": {
+      "already_configured": "Устройство уже настроено.",
+      "no_unconfigured_devices": "Не найдено новых FD50-устройств. Разбудите замок, проверьте Bluetooth HA и повторите."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "A1 Ultra BLE",
+        "description": "Поддерживать BLE-связь и восстанавливать её после обрывов.",
+        "data": {
+          "keep_connected": "Постоянное соединение"
+        }
+      }
+    }
+  },
+  "entity": {
+    "lock": {
+      "manual_lock": {
+        "name": "Замок"
+      }
+    },
+    "select": {
+      "beep_volume": {
+        "name": "Громкость сигнала",
+        "state": {
+          "mute": "Без звука",
+          "normal": "Нормальная"
+        }
+      }
+    },
+    "switch": {
+      "change_direction": {
+        "name": "Изменить направление"
+      }
+    },
+    "button": {
+      "calibrate": {
+        "name": "Перекалибровать"
+      }
+    },
+    "sensor": {
+      "battery_state": {
+        "name": "Батарея",
+        "state": {
+          "high": "Высокий заряд",
+          "medium": "Средний заряд",
+          "low": "Низкий заряд",
+          "poweroff": "Разряжена"
+        }
+      },
+      "signal_strength": {
+        "name": "Сигнал BLE"
+      }
+    }
+  }
+}

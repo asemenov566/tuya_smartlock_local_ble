@@ -1,0 +1,36 @@
+name: Validate integration
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  protocol:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install bleak-retry-connector==4.7.1 pycryptodome==3.20.0
+      - run: python -m unittest discover -s tests -v
+      - run: python -m compileall -q custom_components
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  homeassistant:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install homeassistant==2026.10.0 pycryptodome==3.20.0
+      - run: python tests_ha/install_requirements.py
+      - run: python -m unittest discover -s tests_ha -v
