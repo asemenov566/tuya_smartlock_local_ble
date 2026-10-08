@@ -37,7 +37,11 @@ Home Assistant device page in Russian.
 
 ## Requirements and installation
 
-A disconnect triggers reconnection after a short pause, with increasing delays after failures. Availability reflects the connection instead of masking a lost link with cached state.
+A disconnect triggers reconnection after a short pause, with increasing delays after failures. By default, entities become unavailable while disconnected.
+
+In **Configure**, optionally enable **Wait for reconnection before a command (up to 10 seconds)**. It defaults to off and requires **Keep connected**. During the first 10 seconds of an outage, the lock entity still accepts lock/unlock: one accepted command waits at most 10 seconds from invocation for an authenticated session, then sends once. Expired commands are discarded. Additional commands while one is pending or executing fail instead of accumulating. Disabling the option, unloading or restarting cancels pending work; nothing is persisted.
+
+Once transmission starts, missing acknowledgement never triggers a motor-command replay. The deadline limits waiting to **start transmission**; acknowledgement can take longer. Calibration, direction and volume are unaffected. Lock state is unknown during waiting/disconnection; `bluetooth_connected` and `command_pending` expose connection and execution status. Other entities retain their normal BLE availability.
 
 Current hardware testing still shows brief disconnects roughly every two minutes, followed by automatic reconnection. The cause remains under investigation; persistent connection mode does not yet provide uninterrupted availability.
 

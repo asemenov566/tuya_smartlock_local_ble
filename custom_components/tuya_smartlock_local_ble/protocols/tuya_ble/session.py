@@ -21,6 +21,7 @@ from bleak_retry_connector import (
 )
 from Crypto.Cipher import AES
 
+from ...domain.command_context import CommandNotReady, send_deadline
 from ...domain.credentials import CredentialProvider, LockCredentials
 from ...domain.datapoints import DataPoint, DataPoints
 from ...transports.ble import BleTransport
@@ -632,13 +633,17 @@ class TuyaBLEProtocol:
             )
 
     async def _send_packet_while_connected_locked(
-        self, code, data, response_to, wait_for_response, expected_client=None
+        self, code, data, response_to, wait_for_response, expected_client=None,
+        send_window=None,
     ) -> bool:
         future = None
         seq_num = None
         try:
             # Fragments must stay contiguous; the ACK wait must not hold this lock.
             async with self._operation_lock:
+                command_client = self._client
+                if send_window is not None and not self.command_ready:
+                    raise CommandNotReady()
                 if expected_client is not None and (
                     self._stopped
                     or self._client is not expected_client
@@ -651,6 +656,13 @@ class TuyaBLEProtocol:
                     self._input_expected_responses[seq_num] = future
                 _LOGGER.debug("BLE send #%s %s reply-to #%s", seq_num, code.name, response_to)
                 packets = self._build_packets(seq_num, code, data, response_to)
+                if send_window is not None:
+                    if not self.command_ready or self._client is not command_client:
+                        raise CommandNotReady()
+                    if asyncio.get_running_loop().time() >= send_window.when():
+                        raise TimeoutError("Command expired before transmission")
+                    # After this point delivery is ambiguous on failure: no retry.
+                    send_window.reschedule(None)
                 await self._int_send_packet_while_connected(packets)
             if future is not None:
                 try:
@@ -994,8 +1006,28 @@ class TuyaBLEProtocol:
             protocol_version=self._protocol_version,
         )
 
+    @property
+    def command_ready(self):
+        return bool(
+            not self._stopped and not self._expected_disconnect
+            and self._client and self._client.is_connected and self._is_paired
+        )
+
     async def send_command(self, payload):
         """Send one model payload. Never replay actuator writes."""
+        deadline = send_deadline.get()
+        if deadline is not None:
+            # The application service waits for the connection manager. This
+            # path cannot initiate a second connection or send after its expiry.
+            async with asyncio.timeout_at(deadline) as window:
+                async with self._request_lock:
+                    sent = await self._send_packet_while_connected_locked(
+                        TuyaCommandCode.FUN_SENDER_DPS_V4, payload, 0, True,
+                        send_window=window,
+                    )
+            if not sent:
+                raise TimeoutError("BLE response timed out; command not replayed")
+            return
         await self._send_packet(TuyaCommandCode.FUN_SENDER_DPS_V4, payload, True)
 
     def publish(self, points):

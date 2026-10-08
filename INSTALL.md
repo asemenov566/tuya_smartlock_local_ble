@@ -66,3 +66,7 @@ From GitHub choose **Code → Download ZIP**. Extract it on your computer. Copy 
 This project's domain and package directory are `tuya_smartlock_local_ble`. Components with a different domain can be installed alongside it. Configure a physical lock in only one active BLE integration; otherwise clients may compete for its connection. Shared dependency compatibility must still be checked when either package changes its requirements.
 
 HAOS is a supported deployment target by design: dependencies run inside Home Assistant, not the host OS. Use current HAOS, HA 2026.10.0+ and a supported Bluetooth adapter. This version has not yet been physically tested on HAOS.
+
+## Waiting for commands during reconnection
+
+Since 0.4.0: **Settings → Devices & services → Tuya Smartlock Local BLE → Configure**. Keep **Keep connected** enabled and enable **Wait for reconnection before a command (up to 10 seconds)**. Saving reloads the integration entry. This option defaults to off; disabling restores previous availability and cancels waiting. See README.md for the execution limits.

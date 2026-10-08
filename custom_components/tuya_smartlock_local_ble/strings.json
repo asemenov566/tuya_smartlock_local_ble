@@ -40,11 +40,15 @@
     "step": {
       "init": {
         "title": "A1 Ultra BLE",
-        "description": "Maintain the BLE session and reconnect after disconnection.",
+        "description": "Waiting applies only to lock and unlock and requires Keep connected. Sent commands are never replayed; additional commands are rejected while one is pending.",
         "data": {
-          "keep_connected": "Keep connected"
+          "keep_connected": "Keep connected",
+          "wait_for_reconnect": "Wait for reconnection before a command (up to 10 seconds)"
         }
       }
+    },
+    "error": {
+      "wait_requires_connection": "Enable Keep connected to wait for commands."
     }
   },
   "entity": {
@@ -85,6 +89,14 @@
       "signal_strength": {
         "name": "BLE signal"
       }
+    }
+  },
+  "exceptions": {
+    "command_busy": {
+      "message": "A previous command is still waiting or executing."
+    },
+    "command_failed": {
+      "message": "Command not confirmed: connection/response timed out or the integration stopped. It will not be replayed."
     }
   }
 }

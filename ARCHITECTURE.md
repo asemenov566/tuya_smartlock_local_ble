@@ -15,6 +15,7 @@ connections.py → protocols/<protocol>/session.py
 | Layer | Responsibility |
 | --- | --- |
 | `domain/` | Credential, state and model/session contracts; no HA imports. |
+| `application/lock_commands.py` | Optional single-command waiting, expiry, cancellation and admission; no HA, model, DP or BLE imports. |
 | `models/` | Product/category, capabilities, credential validation, interpreted state, composition of commands. |
 | `protocols/tuya_ble/session.py` | Tuya session handshake, ordered requests, response matching and notifications. No A1 DP mappings. |
 | `protocols/tuya_ble/codec.py` | Packet encryption, CRC, fragmentation and integer encoding. No models or HA imports. |
@@ -57,11 +58,19 @@ Keep connection retries in `ConnectionManager`; never replay lock/unlock/calibra
 
 `ConnectionManager` owns one background task per persistent session. It reads status every 30 seconds. A disconnect wakes it after a one-second BlueZ release interval; failed reconnection attempts back off from 2 seconds to at most 120 seconds. Requests remain sequential and bounded in time.
 
-The session serializes outgoing request/ACK transactions separately from GATT writes. Packet fragments stay contiguous, but waiting for an ACK does not block replies to incoming time requests or datapoint reports. Notification replies belong to the client that received them; they are cancelled on disconnect/unload and cannot leak into a replacement session. Pending requests fail immediately on a disconnect, without replaying motor commands. Entity availability reflects the actual connection; stale state is not presented as an active connection.
+The session serializes outgoing request/ACK transactions separately from GATT writes. Packet fragments stay contiguous, but waiting for an ACK does not block replies to incoming time requests or datapoint reports. Notification replies belong to the client that received them; they are cancelled on disconnect/unload and cannot leak into a replacement session. Pending requests fail immediately on a disconnect, without replaying motor commands. Default entity availability reflects the actual connection; the opt-in command-waiting exception is described below.
 
 Disconnected clients are explicitly closed even when `is_connected` is false, so backend subscriptions and D-Bus resources can be released. Reconnection waits for bounded cleanup of the previous client. Notification callbacks are bound to their originating client and reject events from retired sessions. Unloading waits for owned cleanup tasks.
 
 ## Validation
+
+### Optional command waiting
+
+The composition root creates `LockCommandWaiter` only when both persistent connection and command waiting are enabled. HA's lock adapter invokes the application service with the unchanged model operation. The model and command encoders know nothing about queues, reconnects, HA options or deadlines. ConnectionManager remains the sole reconnect owner.
+
+The application service waits for `command_ready` (authenticated session), permits one pending/executing operation and rejects additional operations. It owns a ten-second availability grace and notification timer, a ten-second per-request send deadline, subscriptions and cancellation on unload. No command is persisted. Only the lock adapter uses this grace; other entities still reflect BLE connectivity. Lock state is unknown while disconnected or executing, and connection/pending attributes stay explicit.
+
+`domain/command_context.py` carries a task-local absolute send deadline through unchanged domain calls. It is scoped with a ContextVar token and reset in a finally block, so heartbeat, other requests and models do not acquire global mutable policy. The protocol adapter honors that deadline while acquiring request/write locks, rechecks the authenticated client and expiry immediately before writing, then disables only the send deadline. Normal ACK timeout still applies. Only `CommandNotReady`, which guarantees that no bytes were submitted, permits waiting again. Transport failure or missing ACK after a write is never retried. Compatible protocol implementations must honor this execution-context contract before enabling waiting.
 
 `python -m unittest discover -s tests -v` tests protocols, command composition and lifecycle without HA. `python -m unittest discover -s tests_ha -v` tests adapters with real Home Assistant installed (Python 3.14 / HA 2026.10.0 in CI). Also run hassfest and compile checks. Use synthetic credentials and simulated devices; physical acceptance is a separate owner-authorized step.
 

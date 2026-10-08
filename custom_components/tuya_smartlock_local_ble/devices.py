@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
 )
 
+from .application.lock_commands import LockCommandWaiter
 from .const import DOMAIN
 
 
@@ -80,3 +81,4 @@ class SmartlockData:
     manager: object
     coordinator: SmartlockCoordinator
     close: Callable[[], Awaitable[None]] | None = None
+    commands: LockCommandWaiter | None = None

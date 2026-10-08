@@ -11,7 +11,7 @@ from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
-from .const import CONF_KEEP_CONNECTED, DOMAIN
+from .const import CONF_KEEP_CONNECTED, CONF_WAIT_FOR_RECONNECT, DOMAIN
 from .keyman import LocalCredentialProvider
 from .registry import MODELS, create_connection, discovery_services
 
@@ -141,26 +141,35 @@ class SmartlockConfigFlow(ConfigFlow, domain=DOMAIN):
 
 class SmartlockOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input=None):
+        errors = {}
         if user_input is not None:
-            return self.async_create_entry(
-                title="",
-                data={
-                    **self.config_entry.options,
-                    CONF_KEEP_CONNECTED: bool(
-                        user_input.get(CONF_KEEP_CONNECTED, True)
-                    ),
-                },
-            )
+            persistent = bool(user_input.get(CONF_KEEP_CONNECTED, True))
+            waiting = bool(user_input.get(CONF_WAIT_FOR_RECONNECT, False))
+            if waiting and not persistent:
+                errors["base"] = "wait_requires_connection"
+            else:
+                return self.async_create_entry(
+                    title="",
+                    data={
+                        **self.config_entry.options,
+                        CONF_KEEP_CONNECTED: persistent,
+                        CONF_WAIT_FOR_RECONNECT: waiting,
+                    },
+                )
+        values = user_input if user_input is not None else self.config_entry.options
         return self.async_show_form(
             step_id="init",
+            errors=errors,
             data_schema=vol.Schema(
                 {
                     vol.Optional(
                         CONF_KEEP_CONNECTED,
-                        default=self.config_entry.options.get(
-                            CONF_KEEP_CONNECTED, True
-                        ),
-                    ): bool
+                        default=values.get(CONF_KEEP_CONNECTED, True),
+                    ): bool,
+                    vol.Optional(
+                        CONF_WAIT_FOR_RECONNECT,
+                        default=values.get(CONF_WAIT_FOR_RECONNECT, False),
+                    ): bool,
                 }
             ),
         )

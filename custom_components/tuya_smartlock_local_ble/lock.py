@@ -2,9 +2,11 @@
 
 from homeassistant.components.lock import LockEntity, LockEntityDescription
 from homeassistant.core import callback
+from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN
 from .devices import SmartlockEntity
+from .domain.command_context import CommandBusy, CommandClosed
 
 
 class LockControl(SmartlockEntity, LockEntity):
@@ -17,12 +19,44 @@ class LockControl(SmartlockEntity, LockEntity):
         )
         self._attr_is_locked = None
         self._last_report = None
+        self._commands = data.commands
+
+    @property
+    def available(self):
+        if self._commands is not None:
+            return self._commands.available
+        return super().available
+
+    @property
+    def is_locked(self):
+        if self._commands is not None and (
+            not self.coordinator.connected or self._commands.pending
+        ):
+            return None
+        return self._attr_is_locked
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "bluetooth_connected": self.coordinator.connected,
+            "command_pending": self._commands.pending if self._commands else False,
+        }
 
     async def _command(self, locked):
-        if locked:
-            await self._model.lock()
-        else:
-            await self._model.unlock()
+        action = self._model.lock if locked else self._model.unlock
+        try:
+            if self._commands is None:
+                await action()
+            else:
+                await self._commands.execute(action)
+        except CommandBusy as exc:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="command_busy"
+            ) from exc
+        except (TimeoutError, CommandClosed) as exc:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="command_failed"
+            ) from exc
         self._attr_is_locked = locked
         self.async_write_ha_state()
 
