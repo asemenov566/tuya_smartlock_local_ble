@@ -2,17 +2,38 @@
 
 [Русский](README.ru.md) · [Installation](INSTALL.md) · [Architecture](ARCHITECTURE.md)
 
-<img src="custom_components/tuya_local_ble_custom/brand/icon.png" width="128" alt="Local BLE smart lock">
+<img src="custom_components/tuya_smartlock_local_ble/brand/icon.png" width="128" alt="Local BLE smart lock">
 
 Local Bluetooth control for **A1 Ultra / A1 Ultra-JM**, Tuya product **hc7n0urm**, category **jtmspro**, FD50 service. Other products are not currently supported merely because they share a similar name.
 
 - Lock and unlock from Home Assistant without a phone BLE connection.
 - Persistent connection enabled by default, status-only heartbeat and bounded reconnect delays.
-- Battery category, optional signal strength, sound volume, rotation direction and an explicit recalibration button.
+- Battery category and optional Bluetooth signal strength (RSSI).
 - Setup through the HA interface; no YAML or prefilled credential file required.
 - Composable protocol sessions, payload dialects and commands for contributors adding models.
 
 **You must obtain your own device credentials first.** Bluetooth discovery does not retrieve keys. An existing Tuya integration does not automatically supply them. See [INSTALL.md](INSTALL.md#obtain-your-own-credentials).
+
+## Controls and diagnostics
+
+| Feature | What it does |
+| --- | --- |
+| Lock / unlock | Operates the lock through the HA interface, scripts and automations over local BLE. |
+| Recalibrate | Sends the model's calibration command when you press the button; it can move the motor and change its travel settings. |
+| Rotation direction | Switches the motor direction for the installation orientation. |
+| Sound volume | Selects **Mute** or **Normal**; other volume levels are not implemented for this model. |
+| Battery | Shows the reported category: high, medium, low or depleted; no estimated percentage. |
+| BLE signal | Optional RSSI sensor in dBm, disabled by default. Enable **BLE signal** in the device's disabled entities. It uses the last advertisement, not a continuous measurement of the active connection. |
+| Device information | Reports firmware, BLE protocol and hardware versions. |
+| Persistent connection | Periodically requests status and retries after connection failures; it does not guarantee uninterrupted radio connectivity. |
+
+Settings can show **Unknown** until the lock reports them or acknowledges a setting change. Calibration is never triggered automatically during setup, reconnection or status checks. Firmware installation (OTA) is not implemented.
+
+## Home Assistant device page
+
+![A1 Ultra controls, calibration, direction, volume, battery and BLE signal in Home Assistant](docs/images/a1-ultra-home-assistant.png)
+
+Home Assistant device page in Russian.
 
 ## Requirements and installation
 
@@ -22,7 +43,7 @@ Add `https://github.com/asemenov566/tuya_smartlock_local_ble` to HACS as a custo
 
 ## Status and limitations
 
-Lock/unlock and persistent BLE operation were physically verified in the preceding implementation. The refactored 0.2.0 and clean HACS installation need user acceptance testing. Direction, volume and calibration use the product's identified DP mapping and have automated command tests; physical behavior is not yet verified. Calibration can move the motor and changes its travel settings; it is never run during setup or heartbeat.
+Lock/unlock, BLE communication and the signal sensor have been observed on real hardware during development. Direction, volume and calibration use the product's identified DP mapping and have automated command tests; comprehensive hardware testing of every setting is still pending.
 
 Lock state is assumed from acknowledged commands, supplemented by BLE reports. It is not a certified door-position sensor. Battery reports are categories, not percentages. Camera/cloud-only functions are not implemented. Continuous connection may increase battery use; 24-hour stability and battery endurance have not been measured.
 
@@ -30,7 +51,7 @@ Lock state is assumed from acknowledged commands, supplemented by BLE reports. I
 
 After provisioning, the component communicates over BLE and makes no Tuya cloud calls. SmartLife/Tuya is needed to provision the lock and obtain credentials. Factory reset or rebinding may change them. Do not delete the lock from SmartLife as a way to disable cloud access: rebinding behavior has not been verified.
 
-The internal HA domain remains `tuya_local_ble_custom` for existing installations. Install only one package providing that domain. Public `tuya_ble` / `tuya_local_ble` use different domains, but only one integration should actively connect to a given physical lock.
+The HA domain and package directory are **`tuya_smartlock_local_ble`**, matching this repository. Other Tuya integrations can be installed alongside it, but only one BLE integration should actively connect to a given physical lock.
 
 ## Development
 

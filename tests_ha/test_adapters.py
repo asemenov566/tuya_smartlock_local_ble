@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from custom_components.tuya_local_ble_custom import (
+from custom_components.tuya_smartlock_local_ble import (
     button,
     config_flow,
     lock,

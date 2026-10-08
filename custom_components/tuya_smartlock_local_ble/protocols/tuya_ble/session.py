@@ -5,6 +5,7 @@ import hashlib
 import logging
 import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from struct import pack
 
 from bleak.backends.device import BLEDevice
@@ -63,6 +64,8 @@ class TuyaBLEProtocol:
         self._ble_device = ble_device
         self._advertisement_data = advertisement_data
         self._operation_lock = asyncio.Lock()
+        self._request_lock = asyncio.Lock()
+        self._response_tasks: set[asyncio.Task] = set()
         self._connect_lock = asyncio.Lock()
         self._client: BleakClientWithServiceCache | None = None
         self._expected_disconnect = False
@@ -308,6 +311,11 @@ class TuyaBLEProtocol:
         """Stop the A1Ultra."""
         _LOGGER.debug("%s: Stop", self.address)
         self._stopped = True
+        pending = tuple(self._response_tasks)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
         await self._execute_disconnect()
 
     async def refresh_session(self) -> None:
@@ -325,15 +333,24 @@ class TuyaBLEProtocol:
 
     def _disconnected(self, client: BleakClientWithServiceCache) -> None:
         """Disconnected callback."""
+        if client is not self._client:
+            return
         was_paired = self._is_paired
         self._is_paired = False
+        self._client = None
+        self._clean_input()
+        for future in tuple(self._input_expected_responses.values()):
+            if future is not None and not future.done():
+                future.set_exception(BleakError("BLE session disconnected"))
+        for task in tuple(self._response_tasks):
+            if task is not asyncio.current_task():
+                task.cancel()
         self._fire_disconnected_callbacks()
         if self._expected_disconnect:
             _LOGGER.debug(
                 "%s: Disconnected from device; RSSI: %s", self.address, self.rssi
             )
             return
-        self._client = None
         _LOGGER.debug(
             "%s: Device unexpectedly disconnected; RSSI: %s", self.address, self.rssi
         )
@@ -354,6 +371,8 @@ class TuyaBLEProtocol:
                     await client.disconnect()
         async with self._seq_num_lock:
             self._current_seq_num = 1
+        self._is_paired = False
+        self._clean_input()
 
     def _select_characteristics(self, client: BleakClientWithServiceCache) -> None:
         """Select the GATT channel actually exposed by the device."""
@@ -551,64 +570,72 @@ class TuyaBLEProtocol:
         ):
             raise TimeoutError("BLE response timed out")
 
-    async def _send_response(
-        self, code: TuyaCommandCode, data: bytes, response_to: int
-    ) -> None:
-        """Send response to received packet."""
-        if self._client and self._client.is_connected:
-            await self._send_packet_while_connected(code, data, response_to, False)
+    def _queue_response(self, code, data, response_to):
+        """Own notification replies and bind them to the receiving session."""
+        if self._stopped or self._client is None:
+            return
+        task = asyncio.create_task(
+            self._send_response(code, data, response_to, self._client)
+        )
+        self._response_tasks.add(task)
+        task.add_done_callback(self._response_tasks.discard)
+
+    async def _send_response(self, code, data, response_to, client=None) -> None:
+        """Reply without waiting behind a request that needs this response."""
+        client = client or self._client
+        if client is None or self._stopped:
+            return
+        try:
+            await self._send_packet_while_connected(
+                code, data, response_to, False, expected_client=client
+            )
+        except Exception as exc:
+            _LOGGER.debug("BLE reply ended (%s)", type(exc).__name__)
 
     async def _send_packet_while_connected(
-        self,
-        code: TuyaCommandCode,
-        data: bytes,
-        response_to: int,
-        wait_for_response: bool,
+        self, code, data, response_to, wait_for_response, *, expected_client=None
     ) -> bool:
-        """Send packet to device and optional read response."""
-        async with self._operation_lock:
+        # Serialize requests, but allow replies while a request awaits its ACK.
+        async with self._request_lock if wait_for_response else nullcontext():
             return await self._send_packet_while_connected_locked(
-                code, data, response_to, wait_for_response
+                code, data, response_to, wait_for_response, expected_client
             )
 
     async def _send_packet_while_connected_locked(
-        self,
-        code: TuyaCommandCode,
-        data: bytes,
-        response_to: int,
-        wait_for_response: bool,
+        self, code, data, response_to, wait_for_response, expected_client=None
     ) -> bool:
-        result = True
-        future: asyncio.Future | None = None
-        seq_num = await self._get_seq_num()
-        if wait_for_response:
-            future = asyncio.Future()
-            self._input_expected_responses[seq_num] = future
-        if response_to > 0:
-            _LOGGER.debug(
-                "%s: Sending packet: #%s %s in response to #%s",
-                self.address,
-                seq_num,
-                code.name,
-                response_to,
-            )
-        else:
-            _LOGGER.debug(
-                "%s: Sending packet: #%s %s", self.address, seq_num, code.name
-            )
+        future = None
+        seq_num = None
         try:
-            packets: list[bytes] = self._build_packets(seq_num, code, data, response_to)
-            await self._int_send_packet_while_connected(packets)
-            if future:
+            # Fragments must stay contiguous; the ACK wait must not hold this lock.
+            async with self._operation_lock:
+                if expected_client is not None and (
+                    self._stopped
+                    or self._client is not expected_client
+                    or not expected_client.is_connected
+                ):
+                    return False
+                seq_num = await self._get_seq_num()
+                if wait_for_response:
+                    future = asyncio.get_running_loop().create_future()
+                    self._input_expected_responses[seq_num] = future
+                _LOGGER.debug("BLE send #%s %s reply-to #%s", seq_num, code.name, response_to)
+                packets = self._build_packets(seq_num, code, data, response_to)
+                await self._int_send_packet_while_connected(packets)
+            if future is not None:
                 try:
                     await asyncio.wait_for(future, RESPONSE_WAIT_TIMEOUT)
                 except TimeoutError:
-                    result = False
+                    return False
+            return True
         finally:
-            self._input_expected_responses.pop(seq_num, None)
-            if future is not None and not future.done():
-                future.cancel()
-        return result
+            if seq_num is not None:
+                self._input_expected_responses.pop(seq_num, None)
+            if future is not None:
+                if not future.done():
+                    future.cancel()
+                elif not future.cancelled():
+                    future.exception()  # Also consume a disconnect during a failed write.
 
     async def _int_send_packet_while_connected(self, packets: list[bytes]) -> None:
         try:
@@ -783,7 +810,7 @@ class TuyaBLEProtocol:
                 timestamp = int(time.time_ns() / 1000000)
                 timezone = -int(time.timezone / 36)
                 data = str(timestamp).encode() + pack(">h", timezone)
-                asyncio.create_task(self._send_response(code, data, seq_num))
+                self._queue_response(code, data, seq_num)
             case TuyaCommandCode.FUN_RECEIVE_TIME2_REQ:
                 if len(data) != 0:
                     raise PacketLengthError()
@@ -800,22 +827,22 @@ class TuyaBLEProtocol:
                     time_str.tm_wday,
                     timezone,
                 )
-                asyncio.create_task(self._send_response(code, data, seq_num))
+                self._queue_response(code, data, seq_num)
             case TuyaCommandCode.FUN_RECEIVE_DP:
                 self._parse_datapoints_v3(time.time(), 0, data, 0)
-                asyncio.create_task(self._send_response(code, bytes(0), seq_num))
+                self._queue_response(code, bytes(0), seq_num)
             case TuyaCommandCode.FUN_RECEIVE_SIGN_DP:
                 dp_seq_num = int.from_bytes(data[:2], "big")
                 flags = data[2]
                 self._parse_datapoints_v3(time.time(), flags, data, 2)
                 data = pack(">HBB", dp_seq_num, flags, 0)
-                asyncio.create_task(self._send_response(code, data, seq_num))
+                self._queue_response(code, data, seq_num)
             case TuyaCommandCode.FUN_RECEIVE_TIME_DP:
                 timestamp: float
                 pos: int
                 timestamp, pos = self._parse_timestamp(data, 0)
                 self._parse_datapoints_v3(timestamp, 0, data, pos)
-                asyncio.create_task(self._send_response(code, bytes(0), seq_num))
+                self._queue_response(code, bytes(0), seq_num)
             case TuyaCommandCode.FUN_RECEIVE_SIGN_TIME_DP:
                 timestamp: float
                 pos: int
@@ -824,13 +851,13 @@ class TuyaBLEProtocol:
                 timestamp, pos = self._parse_timestamp(data, 3)
                 self._parse_datapoints_v3(time.time(), flags, data, pos)
                 data = pack(">HBB", dp_seq_num, flags, 0)
-                asyncio.create_task(self._send_response(code, data, seq_num))
+                self._queue_response(code, data, seq_num)
             case (
                 TuyaCommandCode.FUN_RECEIVE_DP_V4
                 | TuyaCommandCode.FUN_RECEIVE_TIME_DP_V4
             ):
                 self._parse_datapoints_v4(data)
-                asyncio.create_task(self._send_response(code, bytes(0), seq_num))
+                self._queue_response(code, bytes(0), seq_num)
         if response_to != 0:
             future = self._input_expected_responses.pop(response_to, None)
             if future and (not future.done()):

@@ -1,6 +1,6 @@
 # Architecture / Архитектура
 
-The package has one composition root, `custom_components/tuya_local_ble_custom/registry.py`. Model identity is defined on the model class; the UI and credential provider read the catalog. New compatible models do not require product-ID branches in HA platforms or protocol code.
+The package has one composition root, `custom_components/tuya_smartlock_local_ble/registry.py`. Model identity is defined on the model class; the UI and credential provider read the catalog. New compatible models do not require product-ID branches in HA platforms or protocol code.
 
 ```text
 HA platforms / config flow
@@ -52,6 +52,12 @@ For a single changed setting, compose a different command after `super().__init_
 Implement the `LockProtocol` contract, metadata (address, device/version identity, signal), received-point storage and publish/subscription methods used by HA adapters. Register it in `registry.py` and reference its `protocol_id` from a model. Provide `discovery_services`; the flow derives its filter from protocol registrations. HA's static `manifest.json` Bluetooth matcher must also declare a new service UUID; this is a packaging declaration, not another model registry. Existing FD50 models need no manifest change.
 
 Keep connection retries in `ConnectionManager`; never replay lock/unlock/calibrate after ambiguous failure. Setup, heartbeat and discovery must not actuate the motor. A successful ACK does not prove physical movement.
+
+## Session lifecycle
+
+`ConnectionManager` owns one background task per persistent session. It reads status every 30 seconds. A disconnect wakes it after a one-second BlueZ release interval; failed reconnection attempts back off from 2 seconds to at most 120 seconds. Requests remain sequential and bounded in time.
+
+The session serializes outgoing request/ACK transactions separately from GATT writes. Packet fragments stay contiguous, but waiting for an ACK does not block replies to incoming time requests or datapoint reports. Notification replies belong to the client that received them; they are cancelled on disconnect/unload and cannot leak into a replacement session. Pending requests fail immediately on a disconnect, without replaying motor commands. Entity availability reflects the actual connection; stale state is not presented as an active connection.
 
 ## Validation
 

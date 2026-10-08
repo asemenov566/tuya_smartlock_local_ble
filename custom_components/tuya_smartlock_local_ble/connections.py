@@ -1,6 +1,7 @@
 """Own active protocol sessions and their retry tasks. No lock commands."""
 
 import asyncio
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 
@@ -11,6 +12,7 @@ from .keepalive import maintain_connection
 class Connection:
     protocol: object
     task: asyncio.Task | None = None
+    unsubscribe: Callable[[], None] | None = None
 
 
 class ConnectionManager:
@@ -23,13 +25,17 @@ class ConnectionManager:
         connection = Connection(protocol)
         self._connections[key] = connection
         protocol.managed_connection = True
+        disconnected = asyncio.Event()
+        if keep_connected:
+            connection.unsubscribe = protocol.register_disconnected_callback(disconnected.set)
         try:
             async with asyncio.timeout(90):
                 await protocol.initialize()
                 await protocol.update()
             if keep_connected:
+                disconnected.clear()
                 connection.task = asyncio.create_task(
-                    maintain_connection(protocol.refresh_session),
+                    maintain_connection(protocol.refresh_session, disconnected=disconnected),
                     name=f"lock-connection-{key}",
                 )
         except BaseException:
@@ -40,6 +46,8 @@ class ConnectionManager:
         connection = self._connections.pop(key, None)
         if connection is None:
             return
+        if connection.unsubscribe is not None:
+            connection.unsubscribe()
         try:
             if connection.task is not None:
                 connection.task.cancel()

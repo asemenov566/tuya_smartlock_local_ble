@@ -46,11 +46,11 @@ Keep these values private. You do not enter your SmartLife password or Tuya API 
 5. After success, the device page contains lock control, battery and configuration controls. Persistent connection is enabled by default. Settings can remain unknown until a report or a successful write; the component does not invent initial values.
 6. With the lock in a safe position, manually try lock/unlock and confirm physical movement with phone Bluetooth off. Only test direction/calibration intentionally; calibration changes the travel setup.
 
-Credentials are stored locally in HA's config entry (`.storage`, managed by HA). No manual file is required. Secure HA backups, which may contain these credentials. An optional legacy `/config/tuya_local_ble_custom/devices.json` remains supported for existing entries, but fresh setup does not prefill or import it.
+Credentials are stored locally in HA's config entry (`.storage`, managed by HA). No manual file is required. Secure HA backups, which may contain these credentials.
 
 ## Manual ZIP alternative
 
-From GitHub choose **Code → Download ZIP**. Extract it on your computer. Copy only `custom_components/tuya_local_ble_custom` into the HA configuration directory's `custom_components` folder. The final path is `/config/custom_components/tuya_local_ble_custom/manifest.json`; do not nest the repository folder inside it. Restart HA and follow the same setup steps above. Git is not needed on the HA server. Updates to a manual installation are also manual.
+From GitHub choose **Code → Download ZIP**. Extract it on your computer. Copy only `custom_components/tuya_smartlock_local_ble` into the HA configuration directory's `custom_components` folder. The final path is `/config/custom_components/tuya_smartlock_local_ble/manifest.json`; do not nest the repository folder inside it. Restart HA and follow the same setup steps above. Git is not needed on the HA server. Updates to a manual installation are also manual.
 
 ## Troubleshooting and removal
 
@@ -58,11 +58,11 @@ From GitHub choose **Code → Download ZIP**. Extract it on your computer. Copy 
 - **No lock found:** verify HA Bluetooth, range and lock power; wake it; disconnect the phone/other BLE clients. HACS itself does not scan Bluetooth.
 - **Cannot connect:** recheck all four fields belong to the selected lock. A reset/rebind may invalidate previous keys. Retry close to the adapter.
 - **Lock status differs from the mechanism:** it is an assumed state supplemented by reports. Check actual movement; do not use it as a door-closed detector.
-- **Remove:** delete this lock's integration entry in HA, then remove the package in HACS and restart. If you previously used a legacy credential file, remove that file separately after keeping a private backup.
+- **Remove:** delete this lock's integration entry in HA, then remove the package in HACS and restart.
 - **Rollback:** keep a backup of the installed component and credentials before an update. Restore the previous component version and matching settings, then restart. Do not edit `.storage` while HA is running.
 
 ## Coexistence with Tuya Local BLE
 
-`ShonP40/Tuya-BLE` uses domain/folder `tuya_local_ble`; this project uses `tuya_local_ble_custom`. The credential paths and Python packages are separate. Both packages can be installed, and the checked base versions use the same pycryptodome dependency. Configure a particular physical lock in only one active BLE integration; otherwise both clients may compete for its connection. The older private package also called `tuya_local_ble_custom` shares our domain and cannot be installed as a second package alongside this one. Future upstream dependency changes require a compatibility recheck.
+This project's domain and package directory are `tuya_smartlock_local_ble`. Components with a different domain can be installed alongside it. Configure a physical lock in only one active BLE integration; otherwise clients may compete for its connection. Shared dependency compatibility must still be checked when either package changes its requirements.
 
 HAOS is a supported deployment target by design: dependencies run inside Home Assistant, not the host OS. Use current HAOS, HA 2026.10.0+ and a supported Bluetooth adapter. This version has not yet been physically tested on HAOS.

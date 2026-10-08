@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-ROOT = Path(__file__).resolve().parents[1] / "custom_components/tuya_local_ble_custom"
+ROOT = Path(__file__).resolve().parents[1] / "custom_components/tuya_smartlock_local_ble"
 package = types.ModuleType("custom_ble_test")
 package.__path__ = [str(ROOT)]
 sys.modules[package.__name__] = package
@@ -323,10 +323,95 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
         lock.managed_connection = True
         lock._is_paired = True
         lock._reconnect = AsyncMock()
-        lock._disconnected(MagicMock())
+        lock._client = client = MagicMock()
+        lock._disconnected(client)
         await asyncio.sleep(0)
         self.assertFalse(lock._is_paired)
         lock._reconnect.assert_not_called()
+
+    async def test_incoming_reply_can_unblock_waiting_request(self):
+        lock = device()
+        lock._client = MagicMock(is_connected=True)
+        lock._build_packets = MagicMock(return_value=[b"synthetic"])
+        lock._int_send_packet_while_connected = AsyncMock()
+        request = asyncio.create_task(lock._send_packet_while_connected(
+            Code.FUN_SENDER_DEVICE_STATUS, b"", 0, True
+        ))
+        await asyncio.sleep(0)
+        await asyncio.wait_for(lock._send_response(
+            Code.FUN_RECEIVE_TIME1_REQ, b"synthetic-time", 42
+        ), 1)
+        self.assertEqual(lock._int_send_packet_while_connected.await_count, 2)
+        self.assertFalse(request.done())
+        next(iter(lock._input_expected_responses.values())).set_result(0)
+        self.assertTrue(await request)
+
+    async def test_old_notification_reply_is_not_sent_to_new_connection(self):
+        lock = device()
+        old_client = MagicMock(is_connected=True)
+        lock._client = old_client
+        lock._int_send_packet_while_connected = AsyncMock()
+        await lock._operation_lock.acquire()
+        reply = asyncio.create_task(lock._send_response(
+            Code.FUN_RECEIVE_TIME1_REQ, b"synthetic-time", 42, old_client
+        ))
+        await asyncio.sleep(0)
+        lock._client = MagicMock(is_connected=True)
+        lock._operation_lock.release()
+        await reply
+        lock._int_send_packet_while_connected.assert_not_awaited()
+
+    async def test_late_old_disconnect_keeps_new_connection(self):
+        lock = device()
+        lock._client = current = MagicMock(is_connected=True)
+        lock._is_paired = True
+        lock._disconnected(MagicMock())
+        self.assertIs(lock._client, current)
+        self.assertTrue(lock._is_paired)
+
+    async def test_disconnect_aborts_request_without_ack_timeout(self):
+        lock = device()
+        lock.managed_connection = True
+        lock._client = current = MagicMock(is_connected=True)
+        lock._build_packets = MagicMock(return_value=[b"synthetic"])
+        lock._int_send_packet_while_connected = AsyncMock()
+        request = asyncio.create_task(lock._send_packet_while_connected(
+            Code.FUN_SENDER_DEVICE_STATUS, b"", 0, True
+        ))
+        await asyncio.sleep(0)
+        lock._disconnected(current)
+        with self.assertRaises(protocol.BleakError):
+            await asyncio.wait_for(request, 1)
+        self.assertFalse(lock._input_expected_responses)
+
+    async def test_disconnect_wakes_heartbeat_and_uses_short_retry(self):
+        disconnected = asyncio.Event()
+        disconnected.set()
+        delays = []
+        refresh = AsyncMock(side_effect=[OSError(), None])
+
+        async def sleep(delay):
+            delays.append(delay)
+            if len(delays) == 2:
+                raise asyncio.CancelledError
+
+        with self.assertRaises(asyncio.CancelledError):
+            await keepalive.maintain_connection(
+                refresh, disconnected=disconnected, sleep=sleep, interval=30
+            )
+        self.assertEqual(delays, [1, 2])
+        refresh.assert_awaited_once()
+
+    async def test_stop_cancels_queued_notification_responses(self):
+        lock = device()
+        lock._client = MagicMock(is_connected=True)
+        lock._execute_disconnect = AsyncMock()
+        await lock._operation_lock.acquire()
+        lock._queue_response(Code.FUN_RECEIVE_TIME1_REQ, b"time", 1)
+        await asyncio.sleep(0)
+        await lock.stop()
+        self.assertFalse(lock._response_tasks)
+        lock._operation_lock.release()
 
     async def test_heartbeat_backoff_is_bounded_and_recovers(self):
         delays = []

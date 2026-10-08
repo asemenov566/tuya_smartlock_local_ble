@@ -1,5 +1,5 @@
 {
-  "domain": "tuya_local_ble_custom",
+  "domain": "tuya_smartlock_local_ble",
   "name": "Tuya Smartlock Local BLE",
   "bluetooth": [
     {
@@ -21,5 +21,5 @@
   "requirements": [
     "pycryptodome==3.20.0"
   ],
-  "version": "0.2.0"
+  "version": "0.3.0"
 }
