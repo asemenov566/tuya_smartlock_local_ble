@@ -4,7 +4,22 @@ from homeassistant.components.button import ButtonEntity, ButtonEntityDescriptio
 from homeassistant.helpers.entity import EntityCategory
 
 from .const import DOMAIN
-from .devices import SmartlockEntity
+from .devices import SmartlockActionEntity, SmartlockEntity
+
+
+class ToggleLockButton(SmartlockActionEntity, ButtonEntity):
+    def __init__(self, data):
+        super().__init__(
+            data,
+            ButtonEntityDescription(
+                key="toggle_lock",
+                translation_key="toggle_lock",
+                icon="mdi:swap-horizontal",
+            ),
+        )
+
+    async def async_press(self):
+        await self._execute_action(self._actions.toggle)
 
 
 class CalibrateButton(SmartlockEntity, ButtonEntity):
@@ -25,5 +40,7 @@ class CalibrateButton(SmartlockEntity, ButtonEntity):
 
 async def async_setup_entry(hass, entry, async_add_entities):
     data = hass.data[DOMAIN][entry.entry_id]
+    entities = [ToggleLockButton(data)]
     if "calibrate" in data.model.capabilities:
-        async_add_entities([CalibrateButton(data)])
+        entities.append(CalibrateButton(data))
+    async_add_entities(entities)

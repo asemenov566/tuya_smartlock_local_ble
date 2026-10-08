@@ -65,8 +65,17 @@ class A1UltraModel(LockModel):
 
     @property
     def lock_report(self):
+        # 118 is the decoder's internal slot, not a physical-position DP ID.
+        # Only the decoded DP47 boolean is a supported lock-status report.
         point = self.points[118]
-        return (point.timestamp, not bool(point.value)) if point else None
+        if (
+            point is not None
+            and point.flags == 47
+            and type(point.value) is int
+            and point.value in (0, 1)
+        ):
+            return point.timestamp, not bool(point.value)
+        return None
 
     @property
     def volume(self):

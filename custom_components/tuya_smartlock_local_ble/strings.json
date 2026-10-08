@@ -54,7 +54,7 @@
   "entity": {
     "lock": {
       "manual_lock": {
-        "name": "Lock"
+        "name": "Lock control"
       }
     },
     "select": {
@@ -74,6 +74,9 @@
     "button": {
       "calibrate": {
         "name": "Recalibrate"
+      },
+      "toggle_lock": {
+        "name": "Toggle"
       }
     },
     "sensor": {
@@ -88,6 +91,13 @@
       },
       "signal_strength": {
         "name": "BLE signal"
+      },
+      "reported_lock_state": {
+        "name": "Lock status",
+        "state": {
+          "locked": "Locked",
+          "unlocked": "Unlocked"
+        }
       }
     }
   },
@@ -97,6 +107,9 @@
     },
     "command_failed": {
       "message": "Command not confirmed: connection/response timed out or the integration stopped. It will not be replayed."
+    },
+    "command_state_unknown": {
+      "message": "Toggle direction is unknown. Choose lock or unlock first, or wait for a device report."
     }
   }
 }

@@ -1,4 +1,4 @@
-"""A1 battery category and BLE signal strength; no invented battery percentage."""
+"""Device-reported lock status, battery category and BLE signal strength."""
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -11,6 +11,40 @@ from homeassistant.helpers.entity import EntityCategory
 
 from .const import DOMAIN
 from .devices import SmartlockEntity
+
+
+class LockStatus(SmartlockEntity, SensorEntity):
+    """Independent of the optimistic command control and its last action."""
+
+    def __init__(self, data):
+        super().__init__(
+            data,
+            SensorEntityDescription(
+                key="reported_lock_state",
+                translation_key="reported_lock_state",
+                device_class=SensorDeviceClass.ENUM,
+                options=["locked", "unlocked"],
+            ),
+        )
+        self._status = data.status
+        self._attr_options = ["locked", "unlocked"]
+
+    @property
+    def native_value(self):
+        if not self.coordinator.connected or self._status.locked is None:
+            return None
+        return "locked" if self._status.locked else "unlocked"
+
+    @property
+    def icon(self):
+        return {
+            "locked": "mdi:lock",
+            "unlocked": "mdi:lock-open",
+        }.get(self.native_value, "mdi:lock-question")
+
+    @property
+    def extra_state_attributes(self):
+        return {"state_source": "device_report"}
 
 
 class BatteryLevel(SmartlockEntity, SensorEntity):
@@ -55,7 +89,7 @@ class BLESignal(SmartlockEntity, SensorEntity):
 
 async def async_setup_entry(hass, entry, async_add_entities):
     data = hass.data[DOMAIN][entry.entry_id]
-    entities = [BLESignal(data)]
+    entities = [BLESignal(data), LockStatus(data)]
     if "battery" in data.model.capabilities:
         entities.append(BatteryLevel(data))
     async_add_entities(entities)

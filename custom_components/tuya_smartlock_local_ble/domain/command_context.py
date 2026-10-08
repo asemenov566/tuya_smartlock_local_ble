@@ -16,3 +16,7 @@ class CommandBusy(Exception):
 
 class CommandClosed(Exception):
     """The owning integration has been unloaded."""
+
+
+class CommandStateUnknown(Exception):
+    """No chosen action or fresh initial report exists to invert."""

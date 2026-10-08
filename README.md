@@ -53,7 +53,7 @@ Add `https://github.com/asemenov566/tuya_smartlock_local_ble` to HACS as a custo
 
 Lock/unlock, BLE communication and the signal sensor have been observed on real hardware during development. Direction, volume and calibration use the product's identified DP mapping and have automated command tests; comprehensive hardware testing of every setting is still pending.
 
-Lock state is assumed from acknowledged commands, supplemented by BLE reports. It is not a certified door-position sensor. Battery reports are categories, not percentages. Camera/cloud-only functions are not implemented. Continuous connection may increase battery use; 24-hour stability and battery endurance have not been measured.
+**Lock control** keeps its command-derived state so the opposite action remains convenient. Its state is not proof of movement. The separate **Lock status** sensor changes only on decoded device lock-status reports (DP47 for A1 Ultra). A command or disconnection clears that sensor until a fresh report arrives; ACKs and unrelated battery/volume updates cannot set it. This is the lock’s reported motor state, not a door-contact sensor. Jam detection is not implemented or physically verified. Battery reports are categories, not percentages. Camera/cloud-only functions are not implemented. Continuous connection may increase battery use; 24-hour stability and battery endurance have not been measured.
 
 ## Local operation
 
@@ -68,3 +68,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) and the repository [add-lock skill](.skil
 Licensed under [MIT](LICENSE).
 
 The MIT license allows use, modification and redistribution, including commercial use, with the copyright and permission notices preserved. The inherited notice and the 2026 contribution notice are both included in LICENSE.
+
+### Toggle button
+
+**Toggle** reverses the shared last acknowledged action, independently of the separate reported status. The lock entity’s `lock.toggle` service uses the same rule. Explicit lock/unlock actions update that same command intent. Before any command, a fresh report can provide the initial direction; if neither is known, choose lock/unlock first. A new action can be sent after acknowledgement without waiting for a matching position report. Pending transmissions still reject additional requests; no motor command is replayed automatically.

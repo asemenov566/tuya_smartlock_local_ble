@@ -75,3 +75,9 @@ The application service waits for `command_ready` (authenticated session), permi
 `python -m unittest discover -s tests -v` tests protocols, command composition and lifecycle without HA. `python -m unittest discover -s tests_ha -v` tests adapters with real Home Assistant installed (Python 3.14 / HA 2026.10.0 in CI). Also run hassfest and compile checks. Use synthetic credentials and simulated devices; physical acceptance is a separate owner-authorized step.
 
 See [.skills/add-lock/SKILL.md](.skills/add-lock/SKILL.md) for the contributor workflow.
+
+### Reported status versus control intent
+
+`application/lock_status.py` owns report freshness and invalidation, independently of HA, model encoders and BLE payload details. The lock adapter wraps admitted commands through this service, preserving the existing optimistic control toggle. The read-only enum sensor consumes only the service’s device-reported value. A command ACK cannot update it. Disconnects and commands invalidate the last report token; unrelated publishes cannot resurrect it. A fresh report arriving before the command ACK is preserved. Model interpretation remains in `models/`; lifecycle subscriptions are closed with the config entry.
+
+`application/lock_actions.py` owns the shared acknowledged command intent for explicit lock/unlock, lock.toggle and the toggle button. Reports can seed the initial direction but never overwrite a chosen action. HA action entities share availability and exception translation; models remain unaware of command intent and buttons.

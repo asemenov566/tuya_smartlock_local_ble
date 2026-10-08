@@ -13,14 +13,67 @@ from custom_components.tuya_smartlock_local_ble import (
     config_flow,
     lock,
     select,
+    sensor,
     switch,
+)
+from custom_components.tuya_smartlock_local_ble.application.lock_actions import (
+    LockActions,
 )
 from custom_components.tuya_smartlock_local_ble.application.lock_commands import (
     LockCommandWaiter,
 )
+from custom_components.tuya_smartlock_local_ble.application.lock_status import (
+    ReportedLockStatus,
+)
 
 
 class AdapterTests(unittest.IsolatedAsyncioTestCase):
+    def data(self, device, model, coordinator, commands, status=None):
+        if status is None:
+            model.lock_report = None
+            status = ReportedLockStatus(device, model, coordinator.async_update_listeners)
+            self.addCleanup(status.close)
+        actions = LockActions(model, status, commands, coordinator.async_update_listeners)
+        return SimpleNamespace(device=device, model=model, coordinator=coordinator,
+                               commands=commands, status=status, actions=actions)
+
+    async def test_control_toggles_but_status_waits_for_device_report(self):
+        device = MagicMock(address="AA:BB:CC:DD:EE:FF", command_ready=True)
+        coordinator = MagicMock(connected=True)
+        model = SimpleNamespace(lock=AsyncMock(), unlock=AsyncMock(), lock_report=None,
+                                name="Test", manufacturer="Test", product_id="test")
+        status = ReportedLockStatus(device, model, coordinator.async_update_listeners)
+        self.addCleanup(status.close)
+        data = self.data(device=device, coordinator=coordinator, model=model,
+                               commands=None, status=status)
+        control = lock.LockControl(data)
+        control.async_write_ha_state = MagicMock()
+        reported = sensor.LockStatus(data)
+        self.assertIsNone(reported.native_value)
+        await control.async_unlock()
+        self.assertFalse(control.is_locked)
+        self.assertIsNone(reported.native_value)
+        self.assertEqual(reported.icon, "mdi:lock-question")
+        model.lock_report = (1, False)
+        status._updated([])
+        self.assertEqual(reported.native_value, "unlocked")
+        self.assertEqual(reported.icon, "mdi:lock-open")
+        await control.async_lock()
+        self.assertTrue(control.is_locked)
+        self.assertIsNone(reported.native_value)
+        model.lock_report = (2, False)  # device still reports unlocked
+        status._updated([])
+        self.assertEqual(reported.native_value, "unlocked")
+        self.assertTrue(control.is_locked)
+        await button.ToggleLockButton(data).async_press()
+        self.assertFalse(control.is_locked)
+        self.assertIsNone(reported.native_value)
+        await control.async_toggle()
+        self.assertTrue(control.is_locked)
+        coordinator.connected = False
+        self.assertFalse(reported.available)
+        self.assertIsNone(reported.native_value)
+
     async def test_wait_option_defaults_off_and_requires_persistence(self):
         flow = config_flow.SmartlockOptionsFlow()
         flow.hass = MagicMock()
@@ -46,11 +99,11 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         commands = LockCommandWaiter(device, coordinator.async_update_listeners, 0.1)
         self.addAsyncCleanup(commands.close)
         model = MagicMock(lock=AsyncMock(), unlock=AsyncMock())
-        data = SimpleNamespace(device=device, coordinator=coordinator,
-                               model=model, commands=commands)
+        data = self.data(device=device, coordinator=coordinator,
+                               model=model, commands=commands, status=None)
         entity = lock.LockControl(data)
         entity.async_write_ha_state = MagicMock()
-        entity._attr_is_locked = True
+        entity._actions._intent = True
         device.command_ready = False
         coordinator.connected = False
         commands._disconnected()
@@ -73,9 +126,10 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(entity.is_locked)
 
     async def test_disabled_option_keeps_original_entity_availability(self):
-        data = SimpleNamespace(device=MagicMock(address="AA:BB:CC:DD:EE:FF"),
+        data = self.data(device=MagicMock(address="AA:BB:CC:DD:EE:FF"),
                                model=MagicMock(), coordinator=MagicMock(connected=False),
-                               commands=None)
+                               commands=None,
+                               status=None)
         self.assertFalse(lock.LockControl(data).available)
 
     async def test_expired_wait_reports_failure_without_changing_lock_state(self):
@@ -84,16 +138,16 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         commands = LockCommandWaiter(device, coordinator.async_update_listeners, 0.01)
         self.addAsyncCleanup(commands.close)
         model = MagicMock(unlock=AsyncMock())
-        entity = lock.LockControl(SimpleNamespace(device=device, model=model,
-                                                  coordinator=coordinator, commands=commands))
+        entity = lock.LockControl(self.data(device=device, model=model,
+                                                  coordinator=coordinator, commands=commands, status=None))
         entity.async_write_ha_state = MagicMock()
-        entity._attr_is_locked = True
+        entity._actions._intent = True
         commands._disconnected()
         with self.assertRaises(HomeAssistantError):
             await entity.async_unlock()
         model.unlock.assert_not_awaited()
         self.assertFalse(entity.available)
-        self.assertTrue(entity._attr_is_locked)
+        self.assertTrue(entity._actions.locked)
 
     def flow(self):
         flow = config_flow.SmartlockConfigFlow()
@@ -162,11 +216,12 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             set_direction=AsyncMock(),
             calibrate=AsyncMock(),
         )
-        data = SimpleNamespace(
+        data = self.data(
             model=model,
             device=MagicMock(address="AA:BB:CC:DD:EE:FF"),
             coordinator=MagicMock(),
             commands=None,
+            status=None,
         )
         entity = lock.LockControl(data)
         entity.async_write_ha_state = MagicMock()

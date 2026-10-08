@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from homeassistant.core import callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import (
@@ -14,8 +15,11 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
 )
 
+from .application.lock_actions import LockActions
 from .application.lock_commands import LockCommandWaiter
+from .application.lock_status import ReportedLockStatus
 from .const import DOMAIN
+from .domain.command_context import CommandBusy, CommandClosed, CommandStateUnknown
 
 
 class SmartlockEntity(CoordinatorEntity):
@@ -39,6 +43,37 @@ class SmartlockEntity(CoordinatorEntity):
     @property
     def available(self):
         return self.coordinator.connected
+
+
+class SmartlockActionEntity(SmartlockEntity):
+    """Common HA boundary for the lock control and toggle button."""
+
+    def __init__(self, data, description):
+        super().__init__(data, description)
+        self._commands = data.commands
+        self._actions = data.actions
+
+    @property
+    def available(self):
+        if self._commands is not None:
+            return self._commands.available
+        return super().available
+
+    async def _execute_action(self, action):
+        try:
+            await action()
+        except CommandBusy as exc:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="command_busy"
+            ) from exc
+        except CommandStateUnknown as exc:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="command_state_unknown"
+            ) from exc
+        except (TimeoutError, CommandClosed) as exc:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="command_failed"
+            ) from exc
 
 
 class SmartlockCoordinator(DataUpdateCoordinator):
@@ -82,3 +117,5 @@ class SmartlockData:
     coordinator: SmartlockCoordinator
     close: Callable[[], Awaitable[None]] | None = None
     commands: LockCommandWaiter | None = None
+    status: ReportedLockStatus | None = None
+    actions: LockActions | None = None

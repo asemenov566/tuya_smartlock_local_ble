@@ -12,7 +12,9 @@ from homeassistant.const import CONF_ADDRESS, EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 
+from .application.lock_actions import LockActions
 from .application.lock_commands import LockCommandWaiter
+from .application.lock_status import ReportedLockStatus
 from .connections import ConnectionManager
 from .const import CONF_KEEP_CONNECTED, CONF_WAIT_FOR_RECONNECT, DOMAIN
 from .devices import SmartlockCoordinator, SmartlockData
@@ -60,6 +62,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if persistent and entry.options.get(CONF_WAIT_FOR_RECONNECT, False)
         else None
     )
+    status = ReportedLockStatus(device, model, coordinator.async_update_listeners)
+    actions = LockActions(model, status, commands, coordinator.async_update_listeners)
 
     async def close():
         try:
@@ -69,9 +73,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             try:
                 await connections.close(entry.entry_id)
             finally:
+                status.close()
                 coordinator.close()
 
-    data = SmartlockData(entry.title, device, model, provider, coordinator, close, commands)
+    data = SmartlockData(
+        entry.title, device, model, provider, coordinator, close, commands, status, actions
+    )
     store[entry.entry_id] = data
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

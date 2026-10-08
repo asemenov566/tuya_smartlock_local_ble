@@ -40,6 +40,7 @@ class FD50PayloadDecoder:
                     and dp_type == PointType.DT_BOOL.value
                     and (typed_len == 1)
                     and (typed_next_pos <= len(data))
+                    and data[typed_value_pos:typed_next_pos] in (b"\x00", b"\x01")
                 ):
                     raw_value = data[typed_value_pos:typed_next_pos]
                     value = raw_value != b"\x00"
