@@ -39,6 +39,8 @@ Home Assistant device page in Russian.
 
 A disconnect triggers reconnection after a short pause, with increasing delays after failures. Availability reflects the connection instead of masking a lost link with cached state.
 
+Current hardware testing still shows brief disconnects roughly every two minutes, followed by automatic reconnection. The cause remains under investigation; persistent connection mode does not yet provide uninterrupted availability.
+
 Home Assistant **2026.10.0 or newer**, a working connectable Bluetooth adapter/proxy in HA, a powered lock in range, HACS for the recommended installation. The tested hardware used local BlueZ Bluetooth; proxies have not been hardware-verified here.
 
 Add `https://github.com/asemenov566/tuya_smartlock_local_ble` to HACS as a custom **Integration** repository. This is not an entry in the default HACS catalog. Follow the [complete installation guide](INSTALL.md) through the first connection.

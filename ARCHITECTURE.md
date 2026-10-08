@@ -61,6 +61,8 @@ The session serializes outgoing request/ACK transactions separately from GATT wr
 
 Disconnected clients are explicitly closed even when `is_connected` is false, so backend subscriptions and D-Bus resources can be released. Reconnection waits for bounded cleanup of the previous client. Notification callbacks are bound to their originating client and reject events from retired sessions. Unloading waits for owned cleanup tasks.
 
+## Validation
+
 `python -m unittest discover -s tests -v` tests protocols, command composition and lifecycle without HA. `python -m unittest discover -s tests_ha -v` tests adapters with real Home Assistant installed (Python 3.14 / HA 2026.10.0 in CI). Also run hassfest and compile checks. Use synthetic credentials and simulated devices; physical acceptance is a separate owner-authorized step.
 
 See [.skills/add-lock/SKILL.md](.skills/add-lock/SKILL.md) for the contributor workflow.
