@@ -369,6 +369,52 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(lock._client, current)
         self.assertTrue(lock._is_paired)
 
+    async def test_remote_disconnect_releases_disconnected_backend(self):
+        lock = device()
+        lock.managed_connection = True
+        lock._client = client = MagicMock(is_connected=False)
+        client.disconnect = AsyncMock()
+        lock._disconnected(client)
+        await lock._wait_for_client_cleanup()
+        client.disconnect.assert_awaited_once()
+        self.assertFalse(lock._client_cleanup_tasks)
+
+    async def test_stop_releases_backend_without_active_radio_link(self):
+        lock = device()
+        lock._client = client = MagicMock(is_connected=False)
+        client.stop_notify = AsyncMock()
+        client.disconnect = AsyncMock()
+        await lock.stop()
+        client.disconnect.assert_awaited_once()
+        client.stop_notify.assert_not_awaited()
+
+    async def test_retired_notifications_cannot_enter_current_session(self):
+        lock = device()
+        old = MagicMock()
+        lock._client = current = MagicMock()
+        lock._notification_handler = MagicMock()
+        lock._session_notification(old, 1, b"stale")
+        lock._session_notification(current, 1, b"current")
+        lock._stopped = True
+        lock._session_notification(current, 1, b"after-stop")
+        lock._notification_handler.assert_called_once_with(1, b"current")
+
+    async def test_reconnect_waits_for_retired_backend_cleanup(self):
+        lock = device()
+        lock.managed_connection = True
+        lock._client = client = MagicMock(is_connected=False)
+        released = asyncio.Event()
+        client.disconnect = AsyncMock(side_effect=released.wait)
+        lock._transport.connect = AsyncMock(side_effect=asyncio.CancelledError)
+        lock._disconnected(client)
+        reconnect = asyncio.create_task(lock._ensure_connected())
+        await asyncio.sleep(0.03)
+        lock._transport.connect.assert_not_awaited()
+        released.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await reconnect
+        lock._transport.connect.assert_awaited_once()
+
     async def test_disconnect_aborts_request_without_ack_timeout(self):
         lock = device()
         lock.managed_connection = True

@@ -6,6 +6,7 @@ import logging
 import time
 from collections.abc import Callable
 from contextlib import nullcontext
+from functools import partial
 from struct import pack
 
 from bleak.backends.device import BLEDevice
@@ -66,6 +67,7 @@ class TuyaBLEProtocol:
         self._operation_lock = asyncio.Lock()
         self._request_lock = asyncio.Lock()
         self._response_tasks: set[asyncio.Task] = set()
+        self._client_cleanup_tasks: set[asyncio.Task] = set()
         self._connect_lock = asyncio.Lock()
         self._client: BleakClientWithServiceCache | None = None
         self._expected_disconnect = False
@@ -316,7 +318,30 @@ class TuyaBLEProtocol:
             task.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
-        await self._execute_disconnect()
+        try:
+            await self._execute_disconnect()
+        finally:
+            await self._wait_for_client_cleanup()
+
+    async def _close_client(self, client: BleakClientWithServiceCache) -> None:
+        """Release backend resources even after the radio link has gone away."""
+        if self._client is client:
+            self._client = None
+        try:
+            async with asyncio.timeout(10):
+                await client.disconnect()
+        except Exception as exc:
+            _LOGGER.debug("BLE client cleanup ended (%s)", type(exc).__name__)
+
+    async def _wait_for_client_cleanup(self) -> None:
+        pending = tuple(self._client_cleanup_tasks)
+        if pending:
+            await asyncio.shield(asyncio.gather(*pending))
+
+    def _session_notification(self, client, sender, data) -> None:
+        """Reject delayed notifications from a retired connection."""
+        if client is self._client and not self._stopped:
+            self._notification_handler(sender, data)
 
     async def refresh_session(self) -> None:
         """Read status; discard a stale session so the next poll reconnects."""
@@ -339,6 +364,9 @@ class TuyaBLEProtocol:
         self._is_paired = False
         self._client = None
         self._clean_input()
+        cleanup = asyncio.create_task(self._close_client(client))
+        self._client_cleanup_tasks.add(cleanup)
+        cleanup.add_done_callback(self._client_cleanup_tasks.discard)
         for future in tuple(self._input_expected_responses.values()):
             if future is not None and not future.done():
                 future.set_exception(BleakError("BLE session disconnected"))
@@ -364,11 +392,12 @@ class TuyaBLEProtocol:
             client = self._client
             self._expected_disconnect = True
             self._client = None
-            if client and client.is_connected:
+            if client:
                 try:
-                    await client.stop_notify(self._characteristic_notify)
+                    if client.is_connected:
+                        await client.stop_notify(self._characteristic_notify)
                 finally:
-                    await client.disconnect()
+                    await self._close_client(client)
         async with self._seq_num_lock:
             self._current_seq_num = 1
         self._is_paired = False
@@ -407,6 +436,7 @@ class TuyaBLEProtocol:
                 return
             attempts_count = 4
             while attempts_count > 0:
+                await self._wait_for_client_cleanup()
                 attempts_count -= 1
                 if attempts_count == 0:
                     _LOGGER.error(
@@ -449,10 +479,10 @@ class TuyaBLEProtocol:
                         await self._transport.start_notify(
                             self._client,
                             self._characteristic_notify,
-                            self._notification_handler,
+                            partial(self._session_notification, client),
                         )
                     except Exception:
-                        await client.disconnect()
+                        await self._close_client(client)
                         self._client = None
                         _LOGGER.error(
                             "%s: starting notifications failed",
@@ -472,14 +502,14 @@ class TuyaBLEProtocol:
                             0,
                             True,
                         ):
-                            await client.disconnect()
+                            await self._close_client(client)
                             self._client = None
                             _LOGGER.error(
                                 "%s: Sending device info request failed", self.address
                             )
                             continue
                     except Exception:
-                        await client.disconnect()
+                        await self._close_client(client)
                         self._client = None
                         _LOGGER.error(
                             "%s: Sending device info request failed",
@@ -498,14 +528,14 @@ class TuyaBLEProtocol:
                             0,
                             True,
                         ):
-                            await client.disconnect()
+                            await self._close_client(client)
                             self._client = None
                             _LOGGER.error(
                                 "%s: Sending pairing request failed", self.address
                             )
                             continue
                     except Exception:
-                        await client.disconnect()
+                        await self._close_client(client)
                         self._client = None
                         _LOGGER.error(
                             "%s: Sending pairing request failed",

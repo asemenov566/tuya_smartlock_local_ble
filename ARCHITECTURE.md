@@ -59,7 +59,7 @@ Keep connection retries in `ConnectionManager`; never replay lock/unlock/calibra
 
 The session serializes outgoing request/ACK transactions separately from GATT writes. Packet fragments stay contiguous, but waiting for an ACK does not block replies to incoming time requests or datapoint reports. Notification replies belong to the client that received them; they are cancelled on disconnect/unload and cannot leak into a replacement session. Pending requests fail immediately on a disconnect, without replaying motor commands. Entity availability reflects the actual connection; stale state is not presented as an active connection.
 
-## Validation
+Disconnected clients are explicitly closed even when `is_connected` is false, so backend subscriptions and D-Bus resources can be released. Reconnection waits for bounded cleanup of the previous client. Notification callbacks are bound to their originating client and reject events from retired sessions. Unloading waits for owned cleanup tasks.
 
 `python -m unittest discover -s tests -v` tests protocols, command composition and lifecycle without HA. `python -m unittest discover -s tests_ha -v` tests adapters with real Home Assistant installed (Python 3.14 / HA 2026.10.0 in CI). Also run hassfest and compile checks. Use synthetic credentials and simulated devices; physical acceptance is a separate owner-authorized step.
 
