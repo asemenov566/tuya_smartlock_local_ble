@@ -5,12 +5,14 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 
+from .application.session_policy import SessionPolicy
 from .keepalive import maintain_connection
 
 
 @dataclass
 class Connection:
     protocol: object
+    policy: object = None
     task: asyncio.Task | None = None
     unsubscribe: Callable[[], None] | None = None
 
@@ -19,25 +21,36 @@ class ConnectionManager:
     def __init__(self):
         self._connections: dict[str, Connection] = {}
 
-    async def start(self, key, protocol, keep_connected=True):
+    async def start(
+        self, key, protocol, keep_connected=True, *, poll_interval=20, hold_time=10
+    ):
         if key in self._connections:
             raise ValueError("Connection already owned")
-        connection = Connection(protocol)
+        policy = SessionPolicy(
+            protocol,
+            persistent=keep_connected,
+            poll_interval=poll_interval,
+            hold_time=hold_time,
+        )
+        connection = Connection(protocol, policy)
         self._connections[key] = connection
         protocol.managed_connection = True
         disconnected = asyncio.Event()
         if keep_connected:
-            connection.unsubscribe = protocol.register_disconnected_callback(disconnected.set)
+            connection.unsubscribe = protocol.register_disconnected_callback(
+                disconnected.set
+            )
         try:
-            async with asyncio.timeout(90):
-                await protocol.initialize()
-                await protocol.update()
+            await protocol.initialize()
             if keep_connected:
-                disconnected.clear()
+                disconnected.set()
                 connection.task = asyncio.create_task(
-                    maintain_connection(protocol.refresh_session, disconnected=disconnected),
+                    maintain_connection(policy.refresh, disconnected=disconnected),
                     name=f"lock-connection-{key}",
                 )
+            else:
+                policy.start_polling()
+            return policy
         except BaseException:
             await self.close(key)
             raise
@@ -55,7 +68,10 @@ class ConnectionManager:
                     await connection.task
         finally:
             # A failed heartbeat must not prevent releasing the BLE client.
-            await connection.protocol.stop()
+            try:
+                await connection.policy.close()
+            finally:
+                await connection.protocol.stop()
 
     async def close_all(self):
         errors = []

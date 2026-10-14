@@ -5,7 +5,7 @@ import hashlib
 import logging
 import time
 from collections.abc import Callable
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from functools import partial
 from struct import pack
 
@@ -42,6 +42,7 @@ from .exceptions import (
     PacketLengthError,
     ProtocolError,
 )
+from .reports import decode_report
 
 _LOGGER = logging.getLogger(__name__)
 BLEAK_EXCEPTIONS = (*BLEAK_RETRY_EXCEPTIONS, OSError)
@@ -99,6 +100,9 @@ class TuyaBLEProtocol:
         self._input_expected_length = 0
         self._input_expected_responses: dict[int, asyncio.Future[int] | None] = {}
         self._datapoints = DataPoints()
+        self._report_received = asyncio.Event()
+        self._status_query_client = None
+        self._status_query_lock = asyncio.Lock()
 
     def set_ble_device_and_advertisement_data(
         self, ble_device: BLEDevice, advertisement_data: AdvertisementData
@@ -129,6 +133,39 @@ class TuyaBLEProtocol:
     async def update(self) -> None:
         _LOGGER.debug("%s: Updating", self.address)
         await self._send_packet(TuyaCommandCode.FUN_SENDER_DEVICE_STATUS, bytes())
+
+    async def connect(self):
+        """Establish a reusable session without a motor command."""
+        if self._stopped:
+            raise ProtocolError("Session is stopped")
+        await self._ensure_connected()
+        if not self.command_ready:
+            raise ProtocolError("Session is not ready")
+
+    async def query_status(self):
+        async with self._status_query_lock:
+            try:
+                async with asyncio.timeout(10):
+                    await self.update()
+                    await self._report_received.wait()
+            finally:
+                self._status_query_client = None
+
+    async def disconnect(self):
+        """Release idle BLE while keeping this protocol reusable."""
+        try:
+            pending = tuple(self._response_tasks)
+            if pending:
+                try:
+                    async with asyncio.timeout(5):
+                        await asyncio.gather(*pending, return_exceptions=True)
+                except TimeoutError:
+                    pass
+            await self._execute_disconnect()
+            await self._wait_for_client_cleanup()
+        finally:
+            self._expected_disconnect = self._stopped
+            self._fire_disconnected_callbacks()
 
     async def _update_device_info(self) -> bool:
         if self._device_info is None:
@@ -328,6 +365,16 @@ class TuyaBLEProtocol:
         """Release backend resources even after the radio link has gone away."""
         if self._client is client:
             self._client = None
+        cleanup = self._queue_client_cleanup(client)
+        await asyncio.shield(cleanup)
+
+    def _queue_client_cleanup(self, client):
+        cleanup = asyncio.create_task(self._release_client(client))
+        self._client_cleanup_tasks.add(cleanup)
+        cleanup.add_done_callback(self._client_cleanup_tasks.discard)
+        return cleanup
+
+    async def _release_client(self, client):
         try:
             async with asyncio.timeout(10):
                 await client.disconnect()
@@ -365,9 +412,7 @@ class TuyaBLEProtocol:
         self._is_paired = False
         self._client = None
         self._clean_input()
-        cleanup = asyncio.create_task(self._close_client(client))
-        self._client_cleanup_tasks.add(cleanup)
-        cleanup.add_done_callback(self._client_cleanup_tasks.discard)
+        self._queue_client_cleanup(client)
         for future in tuple(self._input_expected_responses.values()):
             if future is not None and not future.done():
                 future.set_exception(BleakError("BLE session disconnected"))
@@ -656,14 +701,27 @@ class TuyaBLEProtocol:
                     self._input_expected_responses[seq_num] = future
                 _LOGGER.debug("BLE send #%s %s reply-to #%s", seq_num, code.name, response_to)
                 packets = self._build_packets(seq_num, code, data, response_to)
-                if send_window is not None:
-                    if not self.command_ready or self._client is not command_client:
+                def admit_write():
+                    # Run inside the writer task, with no scheduling gap before
+                    # the transport call. Queued callbacks can retire a session
+                    # or consume the deadline after the parent builds its frame.
+                    if self._client is not command_client or (
+                        expected_client is not None
+                        and (self._stopped or not expected_client.is_connected)
+                    ):
                         raise CommandNotReady()
-                    if asyncio.get_running_loop().time() >= send_window.when():
-                        raise TimeoutError("Command expired before transmission")
-                    # After this point delivery is ambiguous on failure: no retry.
-                    send_window.reschedule(None)
-                await self._int_send_packet_while_connected(packets)
+                    if send_window is not None:
+                        if not self.command_ready:
+                            raise CommandNotReady()
+                        if asyncio.get_running_loop().time() >= send_window.when():
+                            raise TimeoutError("Command expired before transmission")
+                        # After this point delivery is ambiguous: never retry.
+                        send_window.reschedule(None)
+                    if code == TuyaCommandCode.FUN_SENDER_DEVICE_STATUS:
+                        self._report_received.clear()
+                        self._status_query_client = command_client
+
+                await self._write_fragments_atomically(packets, admit_write)
             if future is not None:
                 try:
                     await asyncio.wait_for(future, RESPONSE_WAIT_TIMEOUT)
@@ -678,6 +736,33 @@ class TuyaBLEProtocol:
                     future.cancel()
                 elif not future.cancelled():
                     future.exception()  # Also consume a disconnect during a failed write.
+
+    async def _write_fragments_atomically(self, packets, admit_write=None):
+        """Finish an already-started frame before cancelling local ACK waiting."""
+        owner = asyncio.current_task()
+        async def write():
+            async with asyncio.timeout(RESPONSE_WAIT_TIMEOUT):
+                if owner.cancelling():
+                    raise asyncio.CancelledError
+                if admit_write is not None:
+                    admit_write()
+                await self._int_send_packet_while_connected(packets)
+
+        task = asyncio.create_task(write())
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+            except Exception:
+                break
+        if cancelled:
+            # Repeated replacements must not cancel the shielded frame either.
+            with suppress(Exception, asyncio.CancelledError):
+                task.result()
+            raise asyncio.CancelledError
+        task.result()
 
     async def _int_send_packet_while_connected(self, packets: list[bytes]) -> None:
         try:
@@ -814,14 +899,25 @@ class TuyaBLEProtocol:
             pos = next_pos
         self._fire_callbacks(datapoints)
 
-    def _parse_datapoints_v4(self, data: bytes) -> None:
-        self.payload_decoder(data)
+    def _parse_datapoints_v4(self, data: bytes, *, timestamped=False):
+        report = decode_report(data, timestamped=timestamped)
+        self.payload_decoder(report)
+        if (
+            not timestamped
+            and (report.header[5] & 0x7F) == 1
+            and self._status_query_client is not None
+            and self._status_query_client is self._client
+        ):
+            self._report_received.set()
+        return report
 
     def _handle_command_or_response(
         self, seq_num: int, response_to: int, code: TuyaCommandCode, data: bytes
     ) -> None:
         result: int = 0
         match code:
+            case TuyaCommandCode.FUN_SENDER_DPS_V4:
+                result = data[5] if len(data) == 6 and data[0] == 0 else -1
             case TuyaCommandCode.FUN_SENDER_DEVICE_INFO:
                 if len(data) < 46:
                     raise PacketLengthError()
@@ -898,8 +994,14 @@ class TuyaBLEProtocol:
                 TuyaCommandCode.FUN_RECEIVE_DP_V4
                 | TuyaCommandCode.FUN_RECEIVE_TIME_DP_V4
             ):
-                self._parse_datapoints_v4(data)
-                self._queue_response(code, bytes(0), seq_num)
+                try:
+                    report = self._parse_datapoints_v4(
+                        data, timestamped=code == TuyaCommandCode.FUN_RECEIVE_TIME_DP_V4)
+                except ValueError:
+                    _LOGGER.debug("Ignored malformed V4 report (%s bytes)", len(data))
+                else:
+                    if not report.header[5] & 0x80:
+                        self._queue_response(code, report.acknowledgement, seq_num)
         if response_to != 0:
             future = self._input_expected_responses.pop(response_to, None)
             if future and (not future.done()):

@@ -17,10 +17,6 @@ class LockControl(SmartlockActionEntity, LockEntity):
 
     @property
     def is_locked(self):
-        if self._commands is not None and (
-            not self.coordinator.connected or self._actions.pending
-        ):
-            return None
         return self._actions.locked
 
     @property

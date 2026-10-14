@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-import time
 
+from bleak.backends.device import BLEDevice
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth.match import ADDRESS, BluetoothCallbackMatcher
 from homeassistant.config_entries import ConfigEntry
@@ -16,7 +16,13 @@ from .application.lock_actions import LockActions
 from .application.lock_commands import LockCommandWaiter
 from .application.lock_status import ReportedLockStatus
 from .connections import ConnectionManager
-from .const import CONF_KEEP_CONNECTED, CONF_WAIT_FOR_RECONNECT, DOMAIN
+from .const import (
+    CONF_HOLD_TIME,
+    CONF_KEEP_CONNECTED,
+    CONF_POLL_INTERVAL,
+    CONF_WAIT_FOR_RECONNECT,
+    DOMAIN,
+)
 from .devices import SmartlockCoordinator, SmartlockData
 from .keyman import LocalCredentialProvider
 from .registry import create_connection
@@ -35,7 +41,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     address = entry.data[CONF_ADDRESS]
     ble_device = bluetooth.async_ble_device_from_address(hass, address, True)
     if ble_device is None:
-        raise ConfigEntryNotReady("Lock is outside Bluetooth range")
+        # Keep command entities loaded while the radio is unavailable. Discovery
+        # replaces this placeholder before the next observed connection attempt.
+        ble_device = BLEDevice(address, entry.title, {})
     provider = LocalCredentialProvider(hass, {**entry.options, **entry.data})
     credentials = await provider.get_device_credentials(address)
     if credentials is None:
@@ -44,12 +52,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         device, model = create_connection(credentials, provider, ble_device)
     except ValueError as exc:
         raise ConfigEntryNotReady("Unsupported lock model") from exc
-    coordinator = SmartlockCoordinator(hass, device)
+    coordinator = SmartlockCoordinator(hass, device, entry.entry_id)
     store = hass.data.setdefault(DOMAIN, {})
     connections = store.setdefault("_connections", ConnectionManager())
     persistent = entry.options.get(CONF_KEEP_CONNECTED, True)
     try:
-        await connections.start(entry.entry_id, device, persistent)
+        session_policy = await connections.start(
+            entry.entry_id,
+            device,
+            persistent,
+            poll_interval=entry.options.get(CONF_POLL_INTERVAL, 20),
+            hold_time=entry.options.get(CONF_HOLD_TIME, 10),
+        )
     except Exception as exc:
         coordinator.close()
         raise ConfigEntryNotReady("Could not establish the BLE session") from exc
@@ -62,10 +76,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if persistent and entry.options.get(CONF_WAIT_FOR_RECONNECT, False)
         else None
     )
-    status = ReportedLockStatus(device, model, coordinator.async_update_listeners)
-    actions = LockActions(model, status, commands, coordinator.async_update_listeners)
+    status = ReportedLockStatus(
+        device,
+        model,
+        coordinator.async_update_listeners,
+        retain_on_disconnect=not persistent,
+    )
+    actions = LockActions(
+        model, status, commands, coordinator.async_update_listeners, session_policy
+    )
 
     async def close():
+        await actions.close()
         try:
             if commands is not None:
                 await commands.close()
@@ -77,7 +99,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 coordinator.close()
 
     data = SmartlockData(
-        entry.title, device, model, provider, coordinator, close, commands, status, actions
+        entry.title,
+        device,
+        model,
+        provider,
+        coordinator,
+        close,
+        commands,
+        status,
+        actions,
+        session_policy,
     )
     store[entry.entry_id] = data
     try:
@@ -87,29 +118,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await close()
         raise
 
-    last_refresh = 0.0
-    refresh_task = None
-
-    async def refresh():
-        try:
-            await device.refresh_session()
-        except Exception:
-            _LOGGER.debug("Advertisement-triggered status refresh failed")
-
     @callback
     def advertised(info, change):
-        nonlocal last_refresh, refresh_task
         device.set_ble_device_and_advertisement_data(info.device, info.advertisement)
-        now = time.monotonic()
-        if (
-            not persistent
-            and now - last_refresh >= 300
-            and (refresh_task is None or refresh_task.done())
-        ):
-            last_refresh = now
-            refresh_task = entry.async_create_background_task(
-                hass, refresh(), "lock-status-refresh"
-            )
 
     entry.async_on_unload(
         bluetooth.async_register_callback(

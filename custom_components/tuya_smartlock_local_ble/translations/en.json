@@ -39,11 +39,25 @@
   "options": {
     "step": {
       "init": {
-        "title": "A1 Ultra BLE",
-        "description": "Waiting applies only to lock and unlock and requires Keep connected. Sent commands are never replayed; additional commands are rejected while one is pending.",
+        "title": "Bluetooth connection",
+        "description": "Choose a mode. Its settings appear on the next step.",
         "data": {
-          "keep_connected": "Keep connected",
-          "wait_for_reconnect": "Wait for reconnection before a command (up to 10 seconds)"
+          "keep_connected": "Keep connected"
+        }
+      },
+      "persistent": {
+        "title": "Persistent connection",
+        "description": "Wait for reconnection before locking or unlocking. Submitted commands are never replayed.",
+        "data": {
+          "wait_for_reconnect": "Wait up to 10 seconds for reconnection"
+        }
+      },
+      "on_demand": {
+        "title": "Connect on demand",
+        "description": "Disconnect after polling. After a command, hold the connection for the selected duration. Failed connection attempts do not queue commands for later replay.",
+        "data": {
+          "poll_interval": "Status polling interval",
+          "hold_time": "Connection hold after a command"
         }
       }
     },
@@ -75,8 +89,14 @@
       "calibrate": {
         "name": "Recalibrate"
       },
-      "toggle_lock": {
-        "name": "Toggle"
+      "open_lock": {
+        "name": "Open"
+      },
+      "close_lock": {
+        "name": "Close"
+      },
+      "refresh_status": {
+        "name": "Status"
       }
     },
     "sensor": {
@@ -98,6 +118,14 @@
           "locked": "Locked",
           "unlocked": "Unlocked"
         }
+      },
+      "expected_action": {
+        "name": "Expected action",
+        "state": {
+          "opening": "Opening",
+          "closing": "Closing",
+          "idle": "Target reported"
+        }
       }
     }
   },
@@ -110,6 +138,19 @@
     },
     "command_state_unknown": {
       "message": "Toggle direction is unknown. Choose lock or unlock first, or wait for a device report."
+    }
+  },
+  "selector": {
+    "connection_duration": {
+      "options": {
+        "0": "Off",
+        "10": "10 seconds",
+        "20": "20 seconds",
+        "30": "30 seconds",
+        "40": "40 seconds",
+        "50": "50 seconds",
+        "60": "60 seconds"
+      }
     }
   }
 }

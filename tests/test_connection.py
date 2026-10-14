@@ -160,11 +160,11 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_configuration_echo_and_battery_parser(self):
         lock = device()
-        lock._parse_datapoints_v4(bytes.fromhex("a100000904000100"))
+        lock._parse_datapoints_v4(bytes.fromhex("000000000001000904000100"))
         self.assertEqual(lock.datapoints[9].value, 0)
-        lock._parse_datapoints_v4(bytes.fromhex("a100004e01000101"))
+        lock._parse_datapoints_v4(bytes.fromhex("000000000001004e01000101"))
         self.assertEqual(lock.datapoints[78].value, 1)
-        lock._parse_datapoints_v4(bytes.fromhex("00000000011f00000101"))
+        lock._parse_datapoints_v4(bytes.fromhex("000000000001001f04000101"))
         self.assertEqual(lock.datapoints[31].value, 1)
 
     async def test_connection_manager_closes_and_cancels_session(self):
@@ -184,8 +184,8 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_setup_closes_session(self):
         manager = ConnectionManager()
         peer = MagicMock(
-            initialize=AsyncMock(),
-            update=AsyncMock(side_effect=TimeoutError),
+            initialize=AsyncMock(side_effect=TimeoutError),
+            update=AsyncMock(),
             stop=AsyncMock(),
         )
         with self.assertRaises(TimeoutError):
@@ -276,6 +276,101 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
             await lock.stop()
         client.disconnect.assert_awaited_once()
 
+    async def test_cancel_during_write_finishes_frame_before_unlocking(self):
+        peer = device()
+        started, finish = asyncio.Event(), asyncio.Event()
+        sent = []
+        async def write(packets):
+            sent.append(packets[0])
+            started.set()
+            await finish.wait()
+            sent.append(packets[1])
+        peer._build_packets = MagicMock(return_value=[b"first", b"last"])
+        peer._int_send_packet_while_connected = AsyncMock(side_effect=write)
+        task = asyncio.create_task(peer._send_packet_while_connected(
+            Code.FUN_SENDER_DPS_V4, b"", 0, True))
+        await started.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        self.assertTrue(peer._operation_lock.locked())
+        self.assertFalse(task.done())
+        finish.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertFalse(peer._operation_lock.locked())
+        self.assertEqual(sent, [b"first", b"last"])
+        self.assertFalse(peer._input_expected_responses)
+
+    async def test_unload_waits_for_cancelled_idle_disconnect_cleanup(self):
+        from test_session_policy import Policy
+
+        peer = device()
+        started, finish = asyncio.Event(), asyncio.Event()
+        completed = []
+        async def disconnect():
+            started.set()
+            await finish.wait()
+            completed.append(True)
+        client = MagicMock(is_connected=True)
+        client.stop_notify = AsyncMock()
+        client.disconnect = AsyncMock(side_effect=disconnect)
+        peer._client, peer._is_paired = client, True
+        p = Policy(peer, persistent=False, hold_time=0)
+        await p.execute(AsyncMock())
+        await started.wait()
+        await p.close()
+        stop = asyncio.create_task(peer.stop())
+        await asyncio.sleep(0)
+        self.assertFalse(stop.done())
+        finish.set()
+        await asyncio.wait_for(stop, 1)
+        self.assertEqual(completed, [True])
+        client.disconnect.assert_awaited_once()
+
+    async def test_writer_rechecks_deadline_after_task_scheduling(self):
+        peer = device()
+        peer._client, peer._is_paired = MagicMock(is_connected=True), True
+        peer._build_packets = MagicMock(return_value=[b"command"])
+        peer._int_send_packet_while_connected = AsyncMock()
+        window = MagicMock()
+        window.when.return_value = asyncio.get_running_loop().time() + 60
+        task = asyncio.create_task(peer._send_packet_while_connected_locked(
+            Code.FUN_SENDER_DPS_V4, b"", 0, True, send_window=window))
+        # Already queued work runs after the parent has created its writer but
+        # before that writer gets a turn. Simulate expiry in that scheduling gap.
+        asyncio.get_running_loop().call_soon(
+            setattr, window.when, "return_value", 0)
+        with self.assertRaises(TimeoutError):
+            await task
+        peer._int_send_packet_while_connected.assert_not_awaited()
+        window.reschedule.assert_not_called()
+
+    async def test_writer_rechecks_session_after_task_scheduling(self):
+        peer = device()
+        peer._client, peer._is_paired = MagicMock(is_connected=True), True
+        peer._build_packets = MagicMock(return_value=[b"command"])
+        peer._int_send_packet_while_connected = AsyncMock()
+        task = asyncio.create_task(peer._send_packet_while_connected_locked(
+            Code.FUN_SENDER_DPS_V4, b"", 0, True))
+        asyncio.get_running_loop().call_soon(setattr, peer, "_client", None)
+        with self.assertRaises(protocol.CommandNotReady):
+            await task
+        peer._int_send_packet_while_connected.assert_not_awaited()
+
+    async def test_cancel_before_writer_starts_sends_nothing(self):
+        peer = device()
+        peer._client, peer._is_paired = MagicMock(is_connected=True), True
+        peer._build_packets = MagicMock(return_value=[b"command"])
+        peer._int_send_packet_while_connected = AsyncMock()
+        task = asyncio.create_task(peer._send_packet_while_connected_locked(
+            Code.FUN_SENDER_DPS_V4, b"", 0, True))
+        asyncio.get_running_loop().call_soon(task.cancel)
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        peer._int_send_packet_while_connected.assert_not_awaited()
+
     async def test_cancelled_request_clears_pending_ack(self):
         lock = device()
         lock._build_packets = MagicMock(return_value=[b"fake"])
@@ -337,7 +432,8 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
         request = asyncio.create_task(lock._send_packet_while_connected(
             Code.FUN_SENDER_DEVICE_STATUS, b"", 0, True
         ))
-        await asyncio.sleep(0)
+        while not lock._int_send_packet_while_connected.await_count:
+            await asyncio.sleep(0)
         await asyncio.wait_for(lock._send_response(
             Code.FUN_RECEIVE_TIME1_REQ, b"synthetic-time", 42
         ), 1)
@@ -424,7 +520,8 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
         request = asyncio.create_task(lock._send_packet_while_connected(
             Code.FUN_SENDER_DEVICE_STATUS, b"", 0, True
         ))
-        await asyncio.sleep(0)
+        while not lock._int_send_packet_while_connected.await_count:
+            await asyncio.sleep(0)
         lock._disconnected(current)
         with self.assertRaises(protocol.BleakError):
             await asyncio.wait_for(request, 1)

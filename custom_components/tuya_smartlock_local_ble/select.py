@@ -4,10 +4,10 @@ from homeassistant.components.select import SelectEntity, SelectEntityDescriptio
 from homeassistant.helpers.entity import EntityCategory
 
 from .const import DOMAIN
-from .devices import SmartlockEntity
+from .devices import SmartlockActionEntity
 
 
-class SoundVolume(SmartlockEntity, SelectEntity):
+class SoundVolume(SmartlockActionEntity, SelectEntity):
     def __init__(self, data):
         super().__init__(
             data,
@@ -25,7 +25,7 @@ class SoundVolume(SmartlockEntity, SelectEntity):
         return self._model.volume
 
     async def async_select_option(self, option):
-        await self._model.set_volume(option)
+        await self._execute_setting(lambda: self._model.set_volume(option))
         self.async_write_ha_state()
 
 

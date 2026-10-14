@@ -4,10 +4,10 @@ from homeassistant.components.switch import SwitchEntity, SwitchEntityDescriptio
 from homeassistant.helpers.entity import EntityCategory
 
 from .const import DOMAIN
-from .devices import SmartlockEntity
+from .devices import SmartlockActionEntity
 
 
-class RotationDirection(SmartlockEntity, SwitchEntity):
+class RotationDirection(SmartlockActionEntity, SwitchEntity):
     def __init__(self, data):
         super().__init__(
             data,
@@ -24,10 +24,10 @@ class RotationDirection(SmartlockEntity, SwitchEntity):
         return self._model.reversed_direction
 
     async def async_turn_on(self, **kwargs):
-        await self._model.set_direction(True)
+        await self._execute_setting(lambda: self._model.set_direction(True))
 
     async def async_turn_off(self, **kwargs):
-        await self._model.set_direction(False)
+        await self._execute_setting(lambda: self._model.set_direction(False))
 
 
 async def async_setup_entry(hass, entry, async_add_entities):

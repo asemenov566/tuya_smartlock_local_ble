@@ -4,25 +4,42 @@ from homeassistant.components.button import ButtonEntity, ButtonEntityDescriptio
 from homeassistant.helpers.entity import EntityCategory
 
 from .const import DOMAIN
-from .devices import SmartlockActionEntity, SmartlockEntity
+from .devices import SmartlockActionEntity
 
 
-class ToggleLockButton(SmartlockActionEntity, ButtonEntity):
-    def __init__(self, data):
+class LockActionButton(SmartlockActionEntity, ButtonEntity):
+    def __init__(self, data, locked):
+        self._locked = locked
+        key = "close_lock" if locked else "open_lock"
         super().__init__(
             data,
             ButtonEntityDescription(
-                key="toggle_lock",
-                translation_key="toggle_lock",
-                icon="mdi:swap-horizontal",
+                key=key,
+                translation_key=key,
+                icon="mdi:lock" if locked else "mdi:lock-open",
             ),
         )
 
     async def async_press(self):
-        await self._execute_action(self._actions.toggle)
+        await self._execute_action(lambda: self._actions.set_locked(self._locked))
 
 
-class CalibrateButton(SmartlockEntity, ButtonEntity):
+class RefreshStatusButton(SmartlockActionEntity, ButtonEntity):
+    def __init__(self, data):
+        super().__init__(
+            data,
+            ButtonEntityDescription(
+                key="refresh_status",
+                translation_key="refresh_status",
+                icon="mdi:refresh",
+            ),
+        )
+
+    async def async_press(self):
+        await self._execute_action(self._session_policy.refresh)
+
+
+class CalibrateButton(SmartlockActionEntity, ButtonEntity):
     def __init__(self, data):
         super().__init__(
             data,
@@ -35,12 +52,25 @@ class CalibrateButton(SmartlockEntity, ButtonEntity):
         )
 
     async def async_press(self):
-        await self._model.calibrate()
+        await self._execute_setting(self._model.calibrate)
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
     data = hass.data[DOMAIN][entry.entry_id]
-    entities = [ToggleLockButton(data)]
+    # Remove only the obsolete integration-owned button, preserving other IDs.
+    from homeassistant.helpers import entity_registry as er
+
+    registry = er.async_get(hass)
+    old_id = registry.async_get_entity_id(
+        "button", DOMAIN, f"{data.device.device_id}-toggle_lock"
+    )
+    if old_id:
+        registry.async_remove(old_id)
+    entities = [
+        LockActionButton(data, False),
+        LockActionButton(data, True),
+        RefreshStatusButton(data),
+    ]
     if "calibrate" in data.model.capabilities:
         entities.append(CalibrateButton(data))
     async_add_entities(entities)

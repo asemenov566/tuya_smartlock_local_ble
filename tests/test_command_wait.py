@@ -14,6 +14,23 @@ Waiter = importlib.import_module(
 
 
 class CommandWaitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_default_ten_second_window_does_not_delay_connected_action(self):
+        _, waiter = self.setup_waiter(10)
+        action = AsyncMock()
+        await asyncio.wait_for(waiter.execute(action), timeout=0.2)
+        action.assert_awaited_once()
+
+    async def test_default_window_sends_immediately_when_connection_returns(self):
+        peer, waiter = self.setup_waiter(10)
+        self.disconnect(peer)
+        action = AsyncMock()
+        task = asyncio.create_task(waiter.execute(action))
+        await asyncio.sleep(0)
+        action.assert_not_awaited()
+        self.reconnect(peer)
+        await asyncio.wait_for(task, timeout=0.2)
+        action.assert_awaited_once()
+
     def setup_waiter(self, timeout=0.1):
         peer = device()
         peer._client = MagicMock(is_connected=True)
@@ -50,7 +67,7 @@ class CommandWaitTests(unittest.IsolatedAsyncioTestCase):
         action = AsyncMock()
         with self.assertRaises(TimeoutError):
             await waiter.execute(action)
-        self.assertFalse(waiter.available)
+        self.assertTrue(waiter.available)
         self.reconnect(peer)
         await asyncio.sleep(0)
         action.assert_not_awaited()
@@ -136,12 +153,34 @@ class CommandWaitTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(observed[0], float)
         self.assertIsNone(context.send_deadline.get())
 
-    async def test_repeated_disconnect_does_not_extend_availability(self):
+    async def test_long_outage_still_accepts_command_with_fresh_deadline(self):
+        peer, waiter = self.setup_waiter(0.02)
+        self.disconnect(peer)
+        await asyncio.sleep(0.04)
+        self.disconnect(peer)
+        self.assertTrue(waiter.available)
+        action = AsyncMock()
+        task = asyncio.create_task(waiter.execute(action))
+        await asyncio.sleep(0)
+        self.assertTrue(waiter.pending)
+        action.assert_not_awaited()
+        self.reconnect(peer)
+        await task
+        action.assert_awaited_once()
+
+    async def test_expired_command_does_not_poison_next_manual_request(self):
         peer, waiter = self.setup_waiter(0.01)
         self.disconnect(peer)
-        await asyncio.sleep(0.02)
-        self.disconnect(peer)
-        self.assertFalse(waiter.available)
+        expired, fresh = AsyncMock(), AsyncMock()
+        with self.assertRaises(TimeoutError):
+            await waiter.execute(expired)
+        self.assertTrue(waiter.available)
+        task = asyncio.create_task(waiter.execute(fresh))
+        await asyncio.sleep(0)
+        self.reconnect(peer)
+        await task
+        expired.assert_not_awaited()
+        fresh.assert_awaited_once()
 
     async def test_deadline_expires_behind_request_lock_no_late_write(self):
         peer, waiter = self.setup_waiter(0.01)
@@ -193,3 +232,67 @@ class CommandWaitTests(unittest.IsolatedAsyncioTestCase):
         peer._send_packet = AsyncMock()
         await peer.send_command(b"synthetic")
         peer._send_packet.assert_awaited_once_with(Code.FUN_SENDER_DPS_V4, b"synthetic", True)
+
+    async def test_reversal_releases_old_ack_and_sends_new_command_once(self):
+        actions_type = importlib.import_module("custom_ble_test.application.lock_actions").LockActions
+        status_type = importlib.import_module("custom_ble_test.application.lock_status").ReportedLockStatus
+        peer, waiter = self.setup_waiter()
+        peer._build_packets = MagicMock(side_effect=lambda seq, code, data, response: [data])
+        from types import SimpleNamespace
+        model = SimpleNamespace(lock_report=None,
+            lock=lambda: peer.send_command(b"close"),
+            unlock=lambda: peer.send_command(b"open"))
+        status = status_type(peer, model, MagicMock())
+        self.addCleanup(status.close)
+        actions = actions_type(model, status, waiter, MagicMock())
+        self.addAsyncCleanup(actions.close)
+        started = asyncio.Event()
+        sent = []
+        async def write(packets):
+            sent.extend(packets)
+            if packets == [b"close"]:
+                started.set()  # no ACK for this command
+            else:
+                next(iter(peer._input_expected_responses.values())).set_result(True)
+        peer._int_send_packet_while_connected = AsyncMock(side_effect=write)
+        first = asyncio.create_task(actions.set_locked(True))
+        await started.wait()
+        await asyncio.wait_for(actions.toggle(), 0.5)
+        await first
+        self.assertEqual(sent, [b"close", b"open"])
+        self.assertFalse(actions.locked)
+        self.assertEqual(peer._input_expected_responses, {})
+        self.assertFalse(waiter.pending)
+
+    async def test_offline_reversal_replaces_unsent_request(self):
+        actions_type = importlib.import_module("custom_ble_test.application.lock_actions").LockActions
+        status_type = importlib.import_module("custom_ble_test.application.lock_status").ReportedLockStatus
+        peer, waiter = self.setup_waiter()
+        from types import SimpleNamespace
+        model = SimpleNamespace(lock_report=None, lock=AsyncMock(), unlock=AsyncMock())
+        status = status_type(peer, model, MagicMock())
+        self.addCleanup(status.close)
+        actions = actions_type(model, status, waiter, MagicMock())
+        self.addAsyncCleanup(actions.close)
+        self.disconnect(peer)
+        first = asyncio.create_task(actions.set_locked(True))
+        for _ in range(3):
+            await asyncio.sleep(0)
+        second = asyncio.create_task(actions.toggle())
+        for _ in range(6):
+            await asyncio.sleep(0)
+        self.reconnect(peer)
+        await asyncio.gather(first, second)
+        model.lock.assert_not_awaited()
+        model.unlock.assert_awaited_once()
+        self.assertFalse(actions.locked)
+
+    async def test_replacement_admission_does_not_restart_click_deadline(self):
+        peer, waiter = self.setup_waiter(0.01)
+        requested_at = asyncio.get_running_loop().time() - 0.02
+        self.disconnect(peer)
+        action = AsyncMock()
+        with self.assertRaises(TimeoutError):
+            await waiter.execute(action, requested_at=requested_at)
+        self.reconnect(peer)
+        action.assert_not_awaited()

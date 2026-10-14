@@ -11,7 +11,13 @@ from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
-from .const import CONF_KEEP_CONNECTED, CONF_WAIT_FOR_RECONNECT, DOMAIN
+from .const import (
+    CONF_HOLD_TIME,
+    CONF_KEEP_CONNECTED,
+    CONF_POLL_INTERVAL,
+    CONF_WAIT_FOR_RECONNECT,
+    DOMAIN,
+)
 from .keyman import LocalCredentialProvider
 from .registry import MODELS, create_connection, discovery_services
 
@@ -141,35 +147,88 @@ class SmartlockConfigFlow(ConfigFlow, domain=DOMAIN):
 
 class SmartlockOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input=None):
-        errors = {}
         if user_input is not None:
-            persistent = bool(user_input.get(CONF_KEEP_CONNECTED, True))
-            waiting = bool(user_input.get(CONF_WAIT_FOR_RECONNECT, False))
-            if waiting and not persistent:
-                errors["base"] = "wait_requires_connection"
-            else:
-                return self.async_create_entry(
-                    title="",
-                    data={
-                        **self.config_entry.options,
-                        CONF_KEEP_CONNECTED: persistent,
-                        CONF_WAIT_FOR_RECONNECT: waiting,
-                    },
-                )
-        values = user_input if user_input is not None else self.config_entry.options
+            self._persistent = user_input[CONF_KEEP_CONNECTED]
+            if self._persistent:
+                return await self.async_step_persistent()
+            return await self.async_step_on_demand()
         return self.async_show_form(
             step_id="init",
-            errors=errors,
             data_schema=vol.Schema(
                 {
-                    vol.Optional(
+                    vol.Required(
                         CONF_KEEP_CONNECTED,
-                        default=values.get(CONF_KEEP_CONNECTED, True),
+                        default=self.config_entry.options.get(
+                            CONF_KEEP_CONNECTED, True
+                        ),
                     ): bool,
-                    vol.Optional(
+                }
+            ),
+        )
+
+    async def async_step_persistent(self, user_input=None):
+        if user_input is not None:
+            return self.async_create_entry(
+                title="",
+                data={
+                    **self.config_entry.options,
+                    CONF_KEEP_CONNECTED: True,
+                    CONF_WAIT_FOR_RECONNECT: user_input[CONF_WAIT_FOR_RECONNECT],
+                },
+            )
+        return self.async_show_form(
+            step_id="persistent",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
                         CONF_WAIT_FOR_RECONNECT,
-                        default=values.get(CONF_WAIT_FOR_RECONNECT, False),
+                        default=self.config_entry.options.get(
+                            CONF_WAIT_FOR_RECONNECT, False
+                        ),
                     ): bool,
+                }
+            ),
+        )
+
+    async def async_step_on_demand(self, user_input=None):
+        if user_input is not None:
+            return self.async_create_entry(
+                title="",
+                data={
+                    **self.config_entry.options,
+                    CONF_KEEP_CONNECTED: False,
+                    CONF_WAIT_FOR_RECONNECT: False,
+                    CONF_POLL_INTERVAL: int(user_input[CONF_POLL_INTERVAL]),
+                    CONF_HOLD_TIME: int(user_input[CONF_HOLD_TIME]),
+                },
+            )
+        intervals = ["0", "10", "20", "30", "40", "50", "60"]
+        return self.async_show_form(
+            step_id="on_demand",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_POLL_INTERVAL,
+                        default=str(
+                            self.config_entry.options.get(CONF_POLL_INTERVAL, 20)
+                        ),
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=intervals,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                            translation_key="connection_duration",
+                        )
+                    ),
+                    vol.Required(
+                        CONF_HOLD_TIME,
+                        default=str(self.config_entry.options.get(CONF_HOLD_TIME, 10)),
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=intervals,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                            translation_key="connection_duration",
+                        )
+                    ),
                 }
             ),
         )

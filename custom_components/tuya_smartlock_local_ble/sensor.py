@@ -30,8 +30,12 @@ class LockStatus(SmartlockEntity, SensorEntity):
         self._attr_options = ["locked", "unlocked"]
 
     @property
+    def available(self):
+        return self._status.available
+
+    @property
     def native_value(self):
-        if not self.coordinator.connected or self._status.locked is None:
+        if self._status.locked is None:
             return None
         return "locked" if self._status.locked else "unlocked"
 
@@ -44,7 +48,12 @@ class LockStatus(SmartlockEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        return {"state_source": "device_report"}
+        return {
+            "state_source": "device_report",
+            "bluetooth_connected": self.coordinator.connected,
+            "reported_at": self._status.reported_at,
+            "cached": self._status.locked is not None and not self._status.fresh,
+        }
 
 
 class BatteryLevel(SmartlockEntity, SensorEntity):
@@ -65,6 +74,39 @@ class BatteryLevel(SmartlockEntity, SensorEntity):
     @property
     def native_value(self):
         return self._model.battery
+
+
+class ExpectedAction(SmartlockEntity, SensorEntity):
+    """Requested direction, explicitly separate from measured position."""
+
+    def __init__(self, data):
+        super().__init__(
+            data,
+            SensorEntityDescription(
+                key="expected_action",
+                translation_key="expected_action",
+                device_class=SensorDeviceClass.ENUM,
+                options=["opening", "closing", "idle"],
+                icon="mdi:swap-horizontal",
+            ),
+        )
+        self._actions = data.actions
+
+    @property
+    def available(self):
+        return self._actions.available
+
+    @property
+    def native_value(self):
+        return self._actions.expected_action
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "state_source": "requested_action",
+            "command_pending": self._actions.pending,
+            "bluetooth_connected": self.coordinator.connected,
+        }
 
 
 class BLESignal(SmartlockEntity, SensorEntity):
@@ -89,7 +131,7 @@ class BLESignal(SmartlockEntity, SensorEntity):
 
 async def async_setup_entry(hass, entry, async_add_entities):
     data = hass.data[DOMAIN][entry.entry_id]
-    entities = [BLESignal(data), LockStatus(data)]
+    entities = [BLESignal(data), LockStatus(data), ExpectedAction(data)]
     if "battery" in data.model.capabilities:
         entities.append(BatteryLevel(data))
     async_add_entities(entities)
