@@ -10,3 +10,22 @@ __pycache__/
 .backups/
 .ai/
 devices.json
+
+# Generated output and local development profiles (never release inputs).
+.ruff_cache/
+/dist/
+/build/
+/reports/
+/test-profiles/
+/browser-profiles/
+htmlcov/
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+secrets.yaml
+credentials.json
+*.local.json
+*.local.yaml

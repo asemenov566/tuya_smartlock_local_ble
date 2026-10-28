@@ -79,6 +79,8 @@ The HA domain and package directory are **`tuya_smartlock_local_ble`**, matching
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) and the repository [add-lock skill](.skills/add-lock/SKILL.md). Tests use synthetic values and fake devices. Never submit device keys, HA storage files or raw diagnostics in issues or pull requests.
 
+Use `python scripts/run_tests.py protocol`, `ha` or `packaging` to run tests in a temporary profile. Build an installation ZIP with `python scripts/build_release.py`; its explicit file list excludes local credentials, profiles, reports and documentation screenshots. See the [validation and packaging instructions](ARCHITECTURE.md#validation).
+
 Licensed under [MIT](LICENSE).
 
 The MIT license allows use, modification and redistribution, including commercial use, with the copyright and permission notices preserved. The inherited notice and the 2026 contribution notice are both included in LICENSE.
